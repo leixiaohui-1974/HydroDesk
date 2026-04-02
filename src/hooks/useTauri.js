@@ -99,6 +99,24 @@ export default function useTauri() {
     return writeTextFile(filePath, content);
   }, [isTauriEnv]);
 
+  const readDirectory = useCallback(async (dirPath, recursive = false) => {
+    if (!isTauriEnv) {
+      throw new Error('Directory reading not available in browser mode');
+    }
+
+    const { readDir } = await import('@tauri-apps/api/fs');
+    return readDir(dirPath, { recursive });
+  }, [isTauriEnv]);
+
+  const createDirectory = useCallback(async (dirPath, recursive = true) => {
+    if (!isTauriEnv) {
+      throw new Error('Directory creation not available in browser mode');
+    }
+
+    const { createDir } = await import('@tauri-apps/api/fs');
+    return createDir(dirPath, { recursive });
+  }, [isTauriEnv]);
+
   /**
    * Show a message dialog
    * @param {string} message - Message text
@@ -140,6 +158,8 @@ export default function useTauri() {
     saveFile,
     readFile,
     writeFile,
+    readDirectory,
+    createDirectory,
     showMessage,
     confirm,
   };

@@ -7,6 +7,7 @@ import {
   resolveDaduheShellCaseId,
 } from '../data/daduheShell';
 import { getActiveRoleAgent, getPendingApprovals, studioState } from '../data/studioState';
+import useTauri from '../hooks/useTauri';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 
@@ -84,6 +85,7 @@ const roleTemplates = {
 
 export default function ReviewDelivery() {
   const { activeProject, activeRole, setActiveRole } = useStudioWorkspace();
+  const { isTauri, readFile } = useTauri();
   const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
   const pendingApprovals = getPendingApprovals();
   const { artifacts, checkpoints, executionHistory, loading } = useWorkflowExecution(activeProject.caseId, studioState.reports);
@@ -92,7 +94,44 @@ export default function ReviewDelivery() {
   const latestRun = executionHistory[0];
   const contractChain = getDaduheRunReviewReleaseContracts(shellCaseId);
   const liveMonitorAssets = getDaduheReviewAssets(shellCaseId);
+  const memoAssets = useMemo(
+    () => liveMonitorAssets.filter((asset) => asset.category === 'memo'),
+    [liveMonitorAssets]
+  );
+  const notebookAssetChain = useMemo(
+    () => [
+      {
+        name: 'HydroDesk Notebook JSON',
+        note: 'Notebook 工作面的原始结构化草稿，适合追踪章节级更新与 Agent 回写。',
+        path: `cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.json`,
+      },
+      {
+        name: 'HydroDesk Notebook Markdown',
+        note: 'Notebook 的线性文本版，适合 diff、审查和人工签发前阅读。',
+        path: `cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.md`,
+      },
+      ...memoAssets,
+      contractChain.find((contract) => contract.contractName === 'ReleaseManifest'),
+    ].filter(Boolean),
+    [contractChain, memoAssets, shellCaseId]
+  );
   const shellEntryPoints = getDaduheShellEntryPoints(shellCaseId);
+  const signoffOverview = useMemo(() => {
+    const notebookMeta =
+      notebookMetaMap[`cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.json`] ||
+      notebookMetaMap[`cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.md`] ||
+      null;
+    const releaseManifest = contractChain.find((contract) => contract.contractName === 'ReleaseManifest');
+    return {
+      version: notebookMeta?.version || 'v0.1.0',
+      signoffStatus: notebookMeta?.signoffStatus || 'draft',
+      updatedBy: notebookMeta?.updatedBy || 'Manager Agent',
+      pendingApprovals: pendingApprovals.length,
+      liveGateCount: liveMonitorAssets.filter((asset) => asset.category === 'gate').length,
+      memoCount: memoAssets.length,
+      manifestPath: releaseManifest?.path || '未接入 ReleaseManifest',
+    };
+  }, [contractChain, liveMonitorAssets, memoAssets.length, notebookMetaMap, pendingApprovals.length, shellCaseId]);
   const defaultSpotlight = useMemo(
     () => ({
       title: roleTemplate.topologyNodes[0],
@@ -102,10 +141,64 @@ export default function ReviewDelivery() {
     [roleTemplate]
   );
   const [selectedSpotlight, setSelectedSpotlight] = useState(defaultSpotlight);
+  const [memoPreviewMap, setMemoPreviewMap] = useState({});
+  const [notebookMetaMap, setNotebookMetaMap] = useState({});
 
   useEffect(() => {
     setSelectedSpotlight(defaultSpotlight);
   }, [defaultSpotlight]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMemoPreviews() {
+      if (!isTauri || notebookAssetChain.length === 0) {
+        if (!cancelled) {
+          setMemoPreviewMap({});
+          setNotebookMetaMap({});
+        }
+        return;
+      }
+
+      const entries = await Promise.all(
+        notebookAssetChain.map(async (asset) => {
+          try {
+            const content = await readFile(asset.path);
+            if (asset.path.endsWith('.json')) {
+              const parsed = JSON.parse(content);
+              return [
+                asset.path,
+                {
+                  preview: JSON.stringify(parsed, null, 2).split('\n').slice(0, 8).join('\n'),
+                  metadata: parsed.metadata || null,
+                },
+              ];
+            }
+            return [asset.path, { preview: content.split('\n').slice(0, 8).join('\n'), metadata: null }];
+          } catch (error) {
+            return [asset.path, { preview: '当前 notebook chain 资产尚未生成或暂不可读取。', metadata: null }];
+          }
+        })
+      );
+
+      if (!cancelled) {
+        const previewMap = {};
+        const metaMap = {};
+        entries.forEach(([path, payload]) => {
+          previewMap[path] = payload.preview;
+          metaMap[path] = payload.metadata;
+        });
+        setMemoPreviewMap(previewMap);
+        setNotebookMetaMap(metaMap);
+      }
+    }
+
+    loadMemoPreviews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauri, notebookAssetChain, readFile]);
 
   return (
     <div className="p-6 space-y-6">
@@ -201,6 +294,35 @@ export default function ReviewDelivery() {
               <div className="text-xs text-slate-500">最新运行</div>
               <div className="mt-2 text-base font-semibold text-slate-100">{latestRun?.workflow || '尚未启动真实运行'}</div>
               <div className="mt-1 text-sm text-slate-400">{latestRun ? `pid ${latestRun.pid} · ${latestRun.status}` : '等待 workflow 记录写入'}</div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">签发状态总览卡</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  把 notebook chain 的当前版本、签发状态、更新责任人与 gate 资产数量放到同一总览卡，供管理主智能体快速签发。
+                </div>
+              </div>
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-300">
+                {signoffOverview.signoffStatus}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              {[
+                { label: '版本号', value: signoffOverview.version, note: 'Notebook chain 当前版本' },
+                { label: '最后更新人', value: signoffOverview.updatedBy, note: '当前签发资产责任人' },
+                { label: '待确认', value: signoffOverview.pendingApprovals, note: '人工确认点数量' },
+                { label: 'Gate 资产', value: signoffOverview.liveGateCount, note: 'coverage / verification 等关键验收资产' },
+                { label: 'Memo 数量', value: signoffOverview.memoCount, note: 'review memo 与 release note' },
+                { label: 'Manifest', value: signoffOverview.manifestPath, note: '正式签发清单入口' },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
+                  <div className="text-xs text-slate-500">{item.label}</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-100 break-all">{item.value}</div>
+                  <div className="mt-1 text-[11px] text-slate-500">{item.note}</div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -304,6 +426,63 @@ export default function ReviewDelivery() {
               ))}
             </div>
           </div>
+          {notebookAssetChain.length > 0 && (
+            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold text-slate-100">Notebook / Memo / Manifest 联动</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    把 Notebook 原稿、自动生成 Memo 和 ReleaseManifest 放到同一审查面板，便于追踪“草稿 → 审查 → 签发”链条。
+                  </div>
+                </div>
+                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-300">
+                  notebook chain
+                </span>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                {notebookAssetChain.map((asset) => (
+                  <div key={asset.path} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
+                    <div className="text-sm text-slate-200">{asset.name}</div>
+                    <div className="mt-1 text-xs leading-5 text-slate-500">{asset.note}</div>
+                    {notebookMetaMap[asset.path] && (
+                      <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-300">
+                          {notebookMetaMap[asset.path].version || 'v0.1.0'}
+                        </span>
+                        <span className="rounded-full border border-slate-700/40 bg-slate-900/60 px-2 py-1 text-slate-300">
+                          {notebookMetaMap[asset.path].signoffStatus || 'draft'}
+                        </span>
+                        <span className="rounded-full border border-slate-700/40 bg-slate-900/60 px-2 py-1 text-slate-300">
+                          {notebookMetaMap[asset.path].updatedBy || 'unknown'}
+                        </span>
+                      </div>
+                    )}
+                    <div className="mt-3 rounded-xl border border-slate-700/30 bg-slate-900/50 p-3">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Preview</div>
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-300">
+                        {memoPreviewMap[asset.path] || '在桌面壳中可读取 memo 预览。'}
+                      </pre>
+                    </div>
+                    <div className="mt-3 text-[10px] text-slate-500">{asset.path}</div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        onClick={() => openPath(asset.path)}
+                        className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
+                      >
+                        打开
+                      </button>
+                      <button
+                        onClick={() => revealPath(asset.path)}
+                        className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
+                      >
+                        定位
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
             <div className="flex items-center justify-between gap-4">
               <div>

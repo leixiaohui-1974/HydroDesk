@@ -184,8 +184,8 @@ export default function Simulation() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">工作流执行</h1>
-          <p className="text-sm text-slate-400 mt-1">统一选择 workflow、模型算法、运行后端和执行策略</p>
+          <h1 className="text-2xl font-bold text-slate-100">Launch · 主链启动台</h1>
+          <p className="text-sm text-slate-400 mt-1">统一选择 daduhe pinned workflow、运行后端和执行策略，把 WorkflowRun 固定为主链入口</p>
         </div>
         <div className="flex items-center gap-2">
           <button

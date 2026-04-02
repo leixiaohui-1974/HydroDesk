@@ -1,5 +1,5 @@
-import React from 'react';
-import { openPath, revealPath } from '../api/tauri_bridge';
+import React, { useCallback, useMemo, useState } from 'react';
+import { openPath, revealPath, runWorkspaceCommand } from '../api/tauri_bridge';
 import {
   daduheWavePlan,
   getDaduheReviewAssets,
@@ -37,6 +37,41 @@ export default function ProjectCenter() {
   const contractChain = getDaduheRunReviewReleaseContracts(shellCaseId);
   const reviewAssets = getDaduheReviewAssets(shellCaseId);
   const shellEntryPoints = getDaduheShellEntryPoints(shellCaseId);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionResult, setActionResult] = useState(null);
+  const [actionError, setActionError] = useState('');
+  const parsedActionPayload = useMemo(() => {
+    if (!actionResult?.stdout) return null;
+    try {
+      return JSON.parse(actionResult.stdout);
+    } catch {
+      return null;
+    }
+  }, [actionResult]);
+
+  const actionCommands = useMemo(() => ({
+    runFast: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action run-fast --retry-max 2`,
+    retryFailed: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action retry-failed --execution-profile fast_validation --retry-max 2`,
+    refreshDashboard: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action refresh-dashboard`,
+    runFullReview: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action run-full-review`,
+    buildReleasePack: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action build-release-pack`,
+    runScadaReplay: `python3 "Hydrology/workflows/hydrodesk_e2e_actions.py" --case-id "${shellCaseId}" --action run-scada-replay --scenario-id "daduhe_baseline" --replay-speed 60 --quality-code GOOD --max-events 1200`,
+  }), [shellCaseId]);
+
+  const runCaseAction = useCallback(async (command) => {
+    setActionBusy(true);
+    setActionError('');
+    try {
+      const result = await runWorkspaceCommand(command, '.', null);
+      setActionResult(result || null);
+      reloadRuntime();
+      reloadCaseSummary();
+    } catch (error) {
+      setActionError(error?.message || String(error));
+    } finally {
+      setActionBusy(false);
+    }
+  }, [reloadRuntime, reloadCaseSummary]);
 
   return (
     <div className="p-6 space-y-6">
@@ -116,16 +151,75 @@ export default function ProjectCenter() {
                 当前 phase: {runtimeSnapshot.phase || '未检测到'} · 当前步骤: {runtimeSnapshot.current_step || '无'}
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={actionBusy}
+                onClick={() => runCaseAction(actionCommands.runFast)}
+                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 disabled:opacity-50"
+              >
+                Run Fast
+              </button>
+              <button
+                disabled={actionBusy}
+                onClick={() => runCaseAction(actionCommands.retryFailed)}
+                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 disabled:opacity-50"
+              >
+                Retry Failed
+              </button>
+              <button
+                onClick={() => {
+                  reloadRuntime();
+                  reloadCaseSummary();
+                }}
+                className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/60"
+              >
+                刷新摘要
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
-              onClick={() => {
-                reloadRuntime();
-                reloadCaseSummary();
-              }}
-              className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/60"
+              disabled={actionBusy}
+              onClick={() => runCaseAction(actionCommands.refreshDashboard)}
+              className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-200 disabled:opacity-50"
             >
-              刷新摘要
+              Refresh Dashboard
+            </button>
+            <button
+              disabled={actionBusy}
+              onClick={() => runCaseAction(actionCommands.runFullReview)}
+              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
+            >
+              Run Full Review
+            </button>
+            <button
+              disabled={actionBusy}
+              onClick={() => runCaseAction(actionCommands.buildReleasePack)}
+              className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 disabled:opacity-50"
+            >
+              Build Release Pack
+            </button>
+            <button
+              disabled={actionBusy}
+              onClick={() => runCaseAction(actionCommands.runScadaReplay)}
+              className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 disabled:opacity-50"
+            >
+              Run SCADA Replay
             </button>
           </div>
+          {actionError && (
+            <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {actionError}
+            </div>
+          )}
+          {actionResult && (
+            <div className="mt-3 rounded-lg border border-slate-700/40 bg-slate-950/60 px-3 py-2 text-[11px] leading-5 text-slate-400">
+              <div>command: {actionResult.command}</div>
+              <div>status: {actionResult.status} · success: {String(actionResult.success)}</div>
+              <div className="mt-1 whitespace-pre-wrap">stdout: {(actionResult.stdout || '').slice(0, 260)}</div>
+              <div className="mt-1 whitespace-pre-wrap">stderr: {(actionResult.stderr || '').slice(0, 160)}</div>
+            </div>
+          )}
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
               <div className="text-xs text-slate-500">唯一执行 workflow</div>
@@ -140,6 +234,31 @@ export default function ProjectCenter() {
               <div className="mt-1 text-xs text-slate-500">
                 原始口径 {caseSummary.raw_outcome_coverage ? `${Math.round(caseSummary.raw_outcome_coverage * 100)}%` : '--'}
               </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-slate-200">SCADA Replay 实时面板</div>
+              <span className="text-[10px] text-slate-500">
+                {parsedActionPayload?.action === 'run-scada-replay' ? 'latest run loaded' : '等待回放任务'}
+              </span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              run_id: {parsedActionPayload?.run_id || '--'} · scenario: {parsedActionPayload?.scenario_id || '--'} · messages: {parsedActionPayload?.messages_emitted ?? '--'}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                onClick={() => openPath(`cases/${shellCaseId}/contracts/scada_replay.latest.json`)}
+                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300"
+              >
+                打开回放摘要
+              </button>
+              <button
+                onClick={() => openPath(`cases/${shellCaseId}/contracts/scada_replay.stream.ndjson`)}
+                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300"
+              >
+                打开实时消息流
+              </button>
             </div>
           </div>
           <div className="mt-4 space-y-3">

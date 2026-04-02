@@ -6,6 +6,7 @@ export const studioState = {
   },
   activeRole: 'designer',
   activeMode: 'delivery',
+  activeSurfaceMode: 'agent',
   roleAgents: {
     teacher: {
       name: '教师主智能体',

@@ -6,31 +6,32 @@ export function resolveDaduheShellCaseId(caseId) {
 
 export function getDaduheRunReviewReleaseContracts(caseId = DADUHE_SHELL_CASE_ID) {
   const resolvedCaseId = resolveDaduheShellCaseId(caseId);
+  const contractRoot = `cases/${resolvedCaseId}/contracts`;
 
   return [
     {
       stage: 'Run',
       contractName: 'WorkflowRun',
-      path: `cases/${resolvedCaseId}/contracts/workflow_run.json`,
+      path: `${contractRoot}/workflow_run.json`,
       status: 'completed_with_review',
       category: 'run',
-      note: '锁定 daduhe 当前 workflow 的 inputs / outputs / steps，作为后续 review 与 release 的唯一运行引用。',
+      note: '以 CaseManifest + DataPack 为输入锚点，锁定 daduhe 当前 run_id、steps 与 outputs，作为 Review / Release 的唯一运行引用。',
     },
     {
       stage: 'Review',
       contractName: 'ReviewBundle',
-      path: `cases/${resolvedCaseId}/contracts/review_bundle.json`,
-      status: 'pending',
+      path: `${contractRoot}/review_bundle.json`,
+      status: 'review_pending',
       category: 'review',
-      note: '承接人工复核 verdict、findings 和报告附件，把审查结论从 live 监控切回正式 contract。',
+      note: '把 verdict、findings、coverage、verification 与 live dashboard 资产收束到正式 ReviewBundle，形成可追踪的审查对象。',
     },
     {
       stage: 'Release',
       contractName: 'ReleaseManifest',
-      path: `cases/${resolvedCaseId}/contracts/release_manifest.json`,
+      path: `${contractRoot}/release_manifest.json`,
       status: 'review_pending',
       category: 'release',
-      note: '把 run/review 与 dashboard、verification、coverage 资产收口成 HydroDesk shell 可交付的 release 包。',
+      note: '把 Case / Data Pack / Run / Review 与 dashboard、verification、coverage 资产收口成 HydroDesk shell 的可交付 release 包。',
     },
   ];
 }
@@ -64,6 +65,18 @@ export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
       category: 'gate',
     },
     {
+      name: 'HydroDesk Review Memo',
+      note: '由 Notebook 工作面自动整理的 review memo，收敛基线、证据与人工审查结论。',
+      path: `cases/${resolvedCaseId}/contracts/hydrodesk_review_memo.latest.md`,
+      category: 'memo',
+    },
+    {
+      name: 'HydroDesk Release Note',
+      note: '由 Notebook 工作面自动生成的 release note 草案，便于签发前复核。',
+      path: `cases/${resolvedCaseId}/contracts/hydrodesk_release_note.latest.md`,
+      category: 'memo',
+    },
+    {
       name: 'Autonomy Roadmap',
       note: '看大渡河自主运行水网模型体系与 HydroDesk 端到端测试壳的主路线图。',
       path: `cases/${resolvedCaseId}/contracts/daduhe_hydrodesk_autonomy_roadmap.md`,
@@ -79,9 +92,28 @@ export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
 }
 
 export function getDaduheShellEntryPoints(caseId = DADUHE_SHELL_CASE_ID) {
+  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
   const reviewAssets = getDaduheReviewAssets(caseId);
 
   return [
+    {
+      title: 'Run Entry',
+      summary: `以 daduhe case shell 为入口触发 Run 阶段，固定产出 cases/${resolvedCaseId}/contracts/workflow_run.json。`,
+      path: 'Hydrology/workflows/run_case_pipeline.py',
+      kind: 'command',
+    },
+    {
+      title: 'Review Entry',
+      summary: `以 ReviewBundle 为正式审查对象，把 verification / coverage / dashboard 资产绑定回 cases/${resolvedCaseId}/contracts/review_bundle.json。`,
+      path: 'Hydrology/workflows/build_review_bundle.py',
+      kind: 'command',
+    },
+    {
+      title: 'Release Entry',
+      summary: `以 ReleaseManifest 收束 Case / Data Pack / Run / Review 链路，生成 cases/${resolvedCaseId}/contracts/release_manifest.json。`,
+      path: 'Hydrology/workflows/build_release_manifest.py',
+      kind: 'command',
+    },
     {
       title: 'North Star',
       summary: '以 daduhe 为唯一验收 case 的主路线图，定义 shell、主链、release gate 的完成标准。',
@@ -99,18 +131,6 @@ export function getDaduheShellEntryPoints(caseId = DADUHE_SHELL_CASE_ID) {
       summary: '项目群级别路线图，说明 daduhe 在整个 HydroMind 项目群中的阶段位置。',
       path: '.planning/ROADMAP.md',
       kind: 'program',
-    },
-    {
-      title: 'Backlog Intake',
-      summary: '新增 backlog 时的标准命令说明，避免把下一步任务散落在临时记录里。',
-      path: 'commands/gsd/add-backlog.md',
-      kind: 'command',
-    },
-    {
-      title: 'Backlog Review',
-      summary: '回顾 backlog、梳理优先级和验收口径时的标准入口。',
-      path: 'commands/gsd/review-backlog.md',
-      kind: 'command',
     },
   ];
 }
@@ -184,6 +204,50 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
       secondaryLabel: roadmap?.name || 'Autonomy Roadmap',
     },
   ];
+}
+
+export function resolveDaduheWorkbenchStageKey(path = '') {
+  if (path.startsWith('/simulation')) {
+    return 'launch';
+  }
+
+  if (path.startsWith('/monitor')) {
+    return 'monitor';
+  }
+
+  if (path.startsWith('/review')) {
+    return 'review';
+  }
+
+  return null;
+}
+
+export function getDaduheWorkbenchRail(caseId = DADUHE_SHELL_CASE_ID, path = '/workbench') {
+  const stages = getDaduheWorkbenchStages(caseId);
+  const activeStageKey = resolveDaduheWorkbenchStageKey(path);
+  const activeIndex = stages.findIndex((stage) => stage.key === activeStageKey);
+
+  return stages.map((stage, index) => {
+    let railState = 'idle';
+
+    if (activeIndex >= 0) {
+      if (index < activeIndex) {
+        railState = 'completed';
+      } else if (index === activeIndex) {
+        railState = 'active';
+      } else {
+        railState = 'upcoming';
+      }
+    } else if (path.startsWith('/workbench')) {
+      railState = index === 0 ? 'next' : 'idle';
+    }
+
+    return {
+      ...stage,
+      railState,
+      isActive: stage.key === activeStageKey,
+    };
+  });
 }
 
 export const daduheWavePlan = [
