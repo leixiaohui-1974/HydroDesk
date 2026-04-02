@@ -2,6 +2,20 @@ const WORKFLOW_EVIDENCE = {
   source_to_delineation: {
     label: 'source_to_delineation',
     headline: '把候选数据源、控制站映射和流域出口闭合到同一条空间证据链。',
+    adjacentWorkflows: [
+      {
+        workflow: 'section_analysis',
+        relationship: '上游 workflow',
+        detail: '先回看断面检查与候选对象，再确认本条流域闭合链路没有脱离同一套空间对象。',
+        contractPath: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+      },
+      {
+        workflow: 'model',
+        relationship: '下游 workflow',
+        detail: '流域边界、控制站映射和 data pack 会继续供 full modeling 主链读取。',
+        contractPath: 'cases/daduhe/contracts/outcomes/model.latest.json',
+      },
+    ],
     groups: [
       {
         id: 'topology',
@@ -71,6 +85,14 @@ const WORKFLOW_EVIDENCE = {
         summary: '从空间证据直接跳到可交付的 workflow 结果资产。',
         items: [
           {
+            title: 'Outcome contract',
+            focus: 'workflow 正式合同',
+            detail: 'source_to_delineation 的正式 outcome 合同，适合和 pipeline report / data pack 对照阅读。',
+            path: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+            route: '/simulation',
+            routeLabel: '查看 workflow',
+          },
+          {
             title: 'Pipeline report',
             focus: '链路结果摘要',
             detail: '把 source discovery 到 delineation 的结果收口为可审查结果资产。',
@@ -93,6 +115,14 @@ const WORKFLOW_EVIDENCE = {
   section_analysis: {
     label: 'section_analysis',
     headline: '把断面成果回链到流域边界、GIS 选择面和断面检查结果。',
+    adjacentWorkflows: [
+      {
+        workflow: 'source_to_delineation',
+        relationship: '下游 workflow',
+        detail: '断面检查后的候选对象会继续流向 source_to_delineation 做边界闭合与 data pack 固化。',
+        contractPath: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+      },
+    ],
     groups: [
       {
         id: 'topology',
@@ -138,6 +168,14 @@ const WORKFLOW_EVIDENCE = {
         summary: '断面分析结果要能直接打开正式产物和上游检查对象。',
         items: [
           {
+            title: 'Outcome contract',
+            focus: 'workflow 正式合同',
+            detail: 'section_analysis 的正式 outcome 合同，便于和审查面/地图对象做一致性核对。',
+            path: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+            route: '/simulation',
+            routeLabel: '查看 workflow',
+          },
+          {
             title: 'Section analysis contract',
             focus: '断面工作流结果',
             detail: '当前 section_analysis 的正式结果合同，用于和 GIS/拓扑证据联读。',
@@ -160,6 +198,20 @@ const WORKFLOW_EVIDENCE = {
   model: {
     label: 'model',
     headline: '把建模主链结果回链到 upstream 空间证据和耦合结果合同。',
+    adjacentWorkflows: [
+      {
+        workflow: 'source_to_delineation',
+        relationship: '上游 workflow',
+        detail: '建模主链的空间基础面仍然来自 source_to_delineation 固化的边界、控制站映射与 data pack。',
+        contractPath: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+      },
+      {
+        workflow: 'section_analysis',
+        relationship: '并排检查 workflow',
+        detail: '需要复核断面/河道检查结论时，可直接回跳到 section_analysis 对照 inspection 证据。',
+        contractPath: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+      },
+    ],
     groups: [
       {
         id: 'topology',
@@ -212,6 +264,14 @@ const WORKFLOW_EVIDENCE = {
         title: '结果 / 合同',
         summary: '把 full pipeline / coupled 结果和空间证据绑在一起读。',
         items: [
+          {
+            title: 'Outcome contract',
+            focus: 'workflow 正式合同',
+            detail: 'model workflow 的正式 outcome 合同，适合与 full pipeline / coupled 结果一起联读。',
+            path: 'cases/daduhe/contracts/outcomes/model.latest.json',
+            route: '/simulation',
+            routeLabel: '查看 workflow',
+          },
           {
             title: 'Full pipeline report',
             focus: '建模主链结果',

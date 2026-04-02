@@ -114,6 +114,49 @@ export default function Modeling() {
             })}
           </div>
 
+          {workflowEvidence.adjacentWorkflows?.length ? (
+            <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
+              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">adjacent workflows</div>
+              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                {workflowEvidence.adjacentWorkflows.map((item) => {
+                  const adjacentEvidence = getDaduheWorkflowEvidence(item.workflow);
+                  return (
+                    <div key={item.workflow} className="rounded-xl border border-slate-700/40 bg-slate-900/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{item.relationship}</div>
+                          <div className="mt-1 text-sm font-semibold text-slate-100">{adjacentEvidence.label}</div>
+                        </div>
+                        <button
+                          onClick={() => setSelectedEvidenceWorkflow(item.workflow)}
+                          className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-[10px] text-hydro-300 transition-colors hover:bg-hydro-500/20"
+                        >
+                          切换到该 workflow
+                        </button>
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-slate-400">{item.detail}</div>
+                      <div className="mt-2 break-all text-[11px] leading-5 text-slate-500">{item.contractPath}</div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          onClick={() => openPath(item.contractPath)}
+                          className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+                        >
+                          打开合同
+                        </button>
+                        <button
+                          onClick={() => revealPath(item.contractPath)}
+                          className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+                        >
+                          定位路径
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-4 grid grid-cols-3 gap-4">
             {workflowEvidence.groups.map((group) => (
               <div key={group.id} className="rounded-2xl border border-slate-700/40 bg-slate-950/50 p-4">
