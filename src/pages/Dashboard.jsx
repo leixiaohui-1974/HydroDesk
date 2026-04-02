@@ -1,136 +1,350 @@
-import React, { useState, useEffect } from 'react';
-import { getSystemInfo, checkOllama, checkHydroMind } from '../api/tauri_bridge';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { checkHydroMind, checkOllama, getSystemInfo, openPath, revealPath } from '../api/tauri_bridge';
+import { getActiveRoleAgent, getPendingApprovals, getRunningTasks, studioState } from '../data/studioState';
+import { getDaduheWorkbenchStages, resolveDaduheShellCaseId } from '../data/daduheShell';
+import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
+import { useStudioRuntime } from '../hooks/useStudioRuntime';
+import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
+import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 
-const StatCard = ({ title, value, subtitle, color = 'hydro' }) => (
-  <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 p-4">
-    <div className="text-xs text-slate-500 mb-1">{title}</div>
-    <div className={`text-2xl font-bold text-${color}-400`}>{value}</div>
-    {subtitle && <div className="text-xs text-slate-500 mt-1">{subtitle}</div>}
-  </div>
-);
+const badgeStyles = {
+  running: 'border-blue-500/30 bg-blue-500/10 text-blue-300',
+  live: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  ready: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
+  attention: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+  pending: 'border-slate-700/50 bg-slate-900/60 text-slate-300',
+};
 
-const EngineCard = ({ name, role, status }) => (
-  <div className="flex items-center gap-3 bg-slate-800/40 rounded-lg p-3 border border-slate-700/30">
-    <div className={`w-2 h-2 rounded-full ${
-      status === 'online' ? 'bg-green-400' : status === 'offline' ? 'bg-red-400' : 'bg-amber-400'
-    }`} />
-    <div className="flex-1 min-w-0">
-      <div className="text-sm font-medium text-slate-200 truncate">{name}</div>
-      <div className="text-xs text-slate-500">{role}</div>
-    </div>
-    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-      status === 'online'
-        ? 'bg-green-500/20 text-green-400'
-        : status === 'offline'
-        ? 'bg-red-500/20 text-red-400'
-        : 'bg-amber-500/20 text-amber-400'
-    }`}>
-      {status === 'online' ? '在线' : status === 'offline' ? '离线' : '检查中'}
-    </span>
-  </div>
-);
+function StageCard({ stage }) {
+  return (
+    <section className="rounded-2xl border border-slate-700/50 bg-slate-900/50 p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{stage.title}</div>
+          <h2 className="mt-2 text-lg font-semibold text-slate-100">{stage.headline}</h2>
+        </div>
+        <span className={`rounded-full border px-3 py-1 text-[10px] ${badgeStyles[stage.tone] || badgeStyles.pending}`}>
+          {stage.statusLabel}
+        </span>
+      </div>
+
+      <p className="mt-3 text-sm leading-6 text-slate-400">{stage.summary}</p>
+
+      <div className="mt-4 rounded-xl border border-slate-700/40 bg-slate-950/50 p-4">
+        <div className="text-xs text-slate-500">当前锚点</div>
+        <div className="mt-1 text-sm text-slate-200">{stage.evidenceLabel}</div>
+        <div className="mt-1 text-xs leading-5 text-slate-500">{stage.evidencePath || '等待运行或契约落盘后绑定'}</div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {stage.notes.map((note) => (
+          <div key={note} className="flex gap-2 text-xs leading-5 text-slate-400">
+            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-hydro-400" />
+            <span>{note}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-2">
+        <Link
+          to={stage.route}
+          className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+        >
+          打开 {stage.title}
+        </Link>
+        {stage.evidencePath && (
+          <>
+            <button
+              onClick={() => openPath(stage.evidencePath)}
+              className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+            >
+              打开锚点
+            </button>
+            <button
+              onClick={() => revealPath(stage.evidencePath)}
+              className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+            >
+              定位锚点
+            </button>
+          </>
+        )}
+        {stage.secondaryPath && (
+          <button
+            onClick={() => openPath(stage.secondaryPath)}
+            className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+          >
+            打开 {stage.secondaryLabel}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export default function Dashboard() {
+  const { activeProject } = useStudioWorkspace();
+  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
   const [sysInfo, setSysInfo] = useState(null);
   const [services, setServices] = useState({
     hydromind: 'checking',
     ollama: 'checking',
   });
+  const pendingApprovals = getPendingApprovals();
+  const runningTasks = getRunningTasks();
+  const activeAgent = getActiveRoleAgent('/workbench');
+  const { runtimeSnapshot } = useStudioRuntime();
+  const { summary: caseSummary } = useCaseContractSummary(shellCaseId);
+  const { artifacts, executionHistory, launchResult, logTail } = useWorkflowExecution(shellCaseId, studioState.artifacts);
+  const currentLogFile = logTail.log_file || launchResult?.log_file || runtimeSnapshot.log_file;
 
   useEffect(() => {
-    getSystemInfo().then(setSysInfo).catch(console.error);
+    getSystemInfo().then(setSysInfo).catch(() => null);
 
-    Promise.allSettled([checkHydroMind(), checkOllama()]).then(([hm, ol]) => {
+    Promise.allSettled([checkHydroMind(), checkOllama()]).then(([hydromind, ollama]) => {
       setServices({
-        hydromind: hm.status === 'fulfilled' && hm.value ? 'online' : 'offline',
-        ollama: ol.status === 'fulfilled' && ol.value ? 'online' : 'offline',
+        hydromind: hydromind.status === 'fulfilled' && hydromind.value ? 'online' : 'offline',
+        ollama: ollama.status === 'fulfilled' && ollama.value ? 'online' : 'offline',
       });
     });
   }, []);
 
-  const engines = [
-    { name: 'HydroOS', role: '魏家好 - 操作系统内核', status: services.hydromind },
-    { name: 'HydroAlgo', role: '黄志峰 - 智能算法库', status: services.hydromind },
-    { name: 'HydroFlow', role: '王孝群 - 水力学模型', status: services.hydromind },
-    { name: 'HydroQuality', role: '施垚 - 水质冰期模型', status: services.hydromind },
-    { name: 'Ollama (Local)', role: '本地LLM推理', status: services.ollama },
+  const stageCards = useMemo(() => {
+    const baseStages = getDaduheWorkbenchStages(shellCaseId);
+
+    return baseStages.map((stage) => {
+      if (stage.key === 'launch') {
+        return {
+          ...stage,
+          headline: launchResult?.workflow || caseSummary.current_workflow || 'Pinned autonomy workflows',
+          statusLabel: launchResult?.status === 'running' ? '运行中' : launchResult?.status ? `最近 ${launchResult.status}` : '待启动',
+          tone: launchResult?.status === 'running' ? 'running' : launchResult ? 'ready' : 'pending',
+        };
+      }
+
+      if (stage.key === 'monitor') {
+        return {
+          ...stage,
+          headline: currentLogFile || runtimeSnapshot.resume_prompt || 'Live dashboard / log tail',
+          statusLabel: currentLogFile ? '已绑定日志' : executionHistory.length > 0 ? '有历史记录' : '待绑定',
+          tone: currentLogFile ? 'live' : executionHistory.length > 0 ? 'ready' : 'pending',
+        };
+      }
+
+      if (stage.key === 'review') {
+        return {
+          ...stage,
+          headline: `gate ${caseSummary.gate_status || 'unknown'} · pending ${pendingApprovals.length}`,
+          statusLabel: caseSummary.gate_status === 'passed' ? '可审查' : pendingApprovals.length > 0 ? '需人工确认' : '待补齐',
+          tone: caseSummary.gate_status === 'passed' ? 'ready' : pendingApprovals.length > 0 ? 'attention' : 'pending',
+        };
+      }
+
+      return {
+        ...stage,
+        headline: caseSummary.closure_check_passed ? 'Release gate ready' : 'Release gate pending',
+        statusLabel: caseSummary.closure_check_passed ? '可签发' : '待收口',
+        tone: caseSummary.closure_check_passed ? 'live' : 'pending',
+      };
+    });
+  }, [caseSummary, currentLogFile, executionHistory.length, launchResult, pendingApprovals.length, runtimeSnapshot.resume_prompt, shellCaseId]);
+
+  const statCards = [
+    {
+      title: '当前案例',
+      value: activeProject.name,
+      subtitle: `case ${shellCaseId} · ${activeProject.stage}`,
+    },
+    {
+      title: '当前链路',
+      value: runtimeSnapshot.task_title || caseSummary.current_workflow || '未检测到主链',
+      subtitle: runtimeSnapshot.current_step || '下一步：优先从 Launch 进入主链',
+    },
+    {
+      title: '审查 gate',
+      value: caseSummary.gate_status || 'unknown',
+      subtitle: `${caseSummary.evidence_bound_count}/${caseSummary.schema_valid_count} evidence/schema`,
+    },
+    {
+      title: 'Release 状态',
+      value: caseSummary.closure_check_passed ? 'ready' : 'pending',
+      subtitle: `${caseSummary.pending_workflows.length} 个 pending workflow`,
+    },
+  ];
+
+  const releaseChecklist = [
+    `HydroMind ${services.hydromind === 'online' ? '在线' : '离线'}`,
+    `Ollama ${services.ollama === 'online' ? '可用' : '不可用'}`,
+    `${runningTasks.length} 个运行中任务`,
+    `${pendingApprovals.length} 个待人工确认`,
   ];
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">系统概览</h1>
-        <p className="text-sm text-slate-400 mt-1">HydroDesk 水网桌面端 - 系统运行状态总览</p>
-      </div>
+      <section className="rounded-3xl border border-hydro-500/20 bg-gradient-to-br from-slate-900 via-slate-900/95 to-hydro-900/30 p-6">
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="max-w-4xl">
+            <div className="inline-flex rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-xs text-hydro-300">
+              daduhe pinned workbench · Launch / Monitor / Review / Release
+            </div>
+            <h1 className="mt-4 text-3xl font-bold text-slate-100">把 HydroDesk 收口成大渡河自主运行验收工作台</h1>
+            <p className="mt-3 text-sm leading-7 text-slate-300">
+              统一从工作台进入 daduhe 主链：先 Launch workflow，再 Monitor live dashboard / log tail，随后 Review gate 与人工确认，最后从
+              ReleaseManifest 和路线图完成交付收口。
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {releaseChecklist.map((item) => (
+                <span key={item} className="rounded-full border border-slate-700/60 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
-        <StatCard title="系统状态" value={services.hydromind === 'online' ? '在线' : '离线'} subtitle="HydroMind 连接" />
-        <StatCard title="引擎数量" value="5" subtitle="MCP 注册引擎" />
-        <StatCard title="CPU 核心" value={sysInfo?.cpu_count || '--'} subtitle={sysInfo?.cpu_brand || '加载中...'} />
-        <StatCard
-          title="内存使用"
-          value={sysInfo ? `${Math.round((sysInfo.used_memory_mb / sysInfo.total_memory_mb) * 100)}%` : '--'}
-          subtitle={sysInfo ? `${sysInfo.used_memory_mb} / ${sysInfo.total_memory_mb} MB` : '加载中...'}
-        />
-      </div>
-
-      <div className="grid grid-cols-3 gap-6">
-        {/* Engine status */}
-        <div className="col-span-2 bg-slate-800/40 rounded-xl border border-slate-700/50 p-4">
-          <h2 className="text-sm font-semibold text-slate-300 mb-3">引擎状态</h2>
-          <div className="space-y-2">
-            {engines.map((engine) => (
-              <EngineCard key={engine.name} {...engine} />
-            ))}
+          <div className="w-80 rounded-2xl border border-slate-700/50 bg-slate-950/40 p-4">
+            <div className="text-xs uppercase tracking-wider text-slate-500">当前主智能体</div>
+            <div className="mt-2 text-lg font-semibold text-slate-100">{activeAgent.name}</div>
+            <div className="mt-1 text-sm text-slate-400">{activeAgent.summary}</div>
+            <div className="mt-4 space-y-2 text-xs text-slate-500">
+              <div>主机：{sysInfo?.hostname || '--'}</div>
+              <div>CPU：{sysInfo?.cpu_count || '--'} 核</div>
+              <div>backend：{runtimeSnapshot.backend || 'agent-teams-local'}</div>
+              <div>resume：{runtimeSnapshot.resume_prompt || '无'}</div>
+            </div>
           </div>
         </div>
 
-        {/* System info */}
-        <div className="bg-slate-800/40 rounded-xl border border-slate-700/50 p-4">
-          <h2 className="text-sm font-semibold text-slate-300 mb-3">系统信息</h2>
-          <div className="space-y-3 text-sm">
-            <div>
-              <div className="text-xs text-slate-500">操作系统</div>
-              <div className="text-slate-300">{sysInfo?.os_name || '--'} {sysInfo?.os_version || ''}</div>
+        <div className="mt-6 grid grid-cols-4 gap-4">
+          {statCards.map((card) => (
+            <div key={card.title} className="rounded-2xl border border-slate-700/50 bg-slate-900/50 p-4">
+              <div className="text-xs text-slate-500">{card.title}</div>
+              <div className="mt-2 text-lg font-semibold text-slate-100">{card.value}</div>
+              <div className="mt-1 text-xs text-slate-500">{card.subtitle}</div>
             </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid grid-cols-4 gap-4">
+        {stageCards.map((stage) => (
+          <StageCard key={stage.key} stage={stage} />
+        ))}
+      </div>
+
+      <div className="grid grid-cols-[1.25fr,1fr] gap-6">
+        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <div className="text-xs text-slate-500">处理器</div>
-              <div className="text-slate-300 text-xs">{sysInfo?.cpu_brand || '--'}</div>
+              <h2 className="text-lg font-semibold text-slate-100">当前 daduhe 链路</h2>
+              <p className="mt-1 text-sm text-slate-400">把当前 workflow、日志、产物和下一步动作固定成同一块工位信息。</p>
             </div>
-            <div>
-              <div className="text-xs text-slate-500">主机名</div>
-              <div className="text-slate-300">{sysInfo?.hostname || '--'}</div>
+            <Link
+              to="/simulation"
+              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+            >
+              去 Launch
+            </Link>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-700/40 bg-slate-950/50 p-4">
+              <div className="text-xs text-slate-500">最新 workflow</div>
+              <div className="mt-2 text-sm font-semibold text-slate-100">{launchResult?.workflow || runtimeSnapshot.task_title || '尚未启动 pinned workflow'}</div>
+              <div className="mt-1 text-xs text-slate-500">{launchResult ? `pid ${launchResult.pid} · ${launchResult.status}` : '建议先进入 Launch 触发主链'}</div>
             </div>
-            <div>
-              <div className="text-xs text-slate-500">内存总量</div>
-              <div className="text-slate-300">{sysInfo ? `${sysInfo.total_memory_mb} MB` : '--'}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">运行模式</div>
-              <div className="text-slate-300">
-                {services.hydromind === 'online' ? '云端 + 本地' : '离线模式'}
+            <div className="rounded-xl border border-slate-700/40 bg-slate-950/50 p-4">
+              <div className="text-xs text-slate-500">当前日志</div>
+              <div className="mt-2 text-sm font-semibold text-slate-100">{currentLogFile || '未绑定'}</div>
+              <div className="mt-3 flex items-center gap-3 text-xs">
+                {currentLogFile ? (
+                  <>
+                    <button onClick={() => openPath(currentLogFile)} className="text-hydro-400 hover:text-hydro-300 transition-colors">
+                      打开
+                    </button>
+                    <button onClick={() => revealPath(currentLogFile)} className="text-slate-400 hover:text-slate-300 transition-colors">
+                      定位
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-slate-500">启动 workflow 后自动绑定</span>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Quick actions */}
-          <div className="mt-4 pt-3 border-t border-slate-700/50">
-            <h3 className="text-xs text-slate-500 mb-2">快捷操作</h3>
-            <div className="space-y-1.5">
-              <button className="w-full text-left text-xs px-3 py-2 rounded-lg bg-hydro-600/20 text-hydro-400 hover:bg-hydro-600/30 transition-colors">
-                新建模型
-              </button>
-              <button className="w-full text-left text-xs px-3 py-2 rounded-lg bg-slate-700/40 text-slate-300 hover:bg-slate-700/60 transition-colors">
-                打开最近项目
-              </button>
-              <button className="w-full text-left text-xs px-3 py-2 rounded-lg bg-slate-700/40 text-slate-300 hover:bg-slate-700/60 transition-colors">
-                导入 EPANET 模型
-              </button>
+          <div className="mt-5 space-y-3">
+            {studioState.tasks.slice(0, 4).map((task) => (
+              <div key={task.id} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium text-slate-200">{task.title}</div>
+                    <div className="mt-1 text-xs leading-5 text-slate-500">{task.detail}</div>
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[10px] ${
+                    task.status === 'running'
+                      ? 'border border-blue-500/30 bg-blue-500/10 text-blue-300'
+                      : task.status === 'pending-approval'
+                        ? 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
+                        : 'border border-slate-700/50 bg-slate-900/60 text-slate-300'
+                  }`}>
+                    {task.status}
+                  </span>
+                </div>
+                <div className="mt-2 text-[11px] text-slate-500">workflow: {task.workflow} · backend: {task.backend}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-100">Review / Release 收口</h2>
+              <p className="mt-1 text-sm text-slate-400">把 gate、真实产物和 release 前置动作固定在同一视图，不再回退到项目中心找入口。</p>
+            </div>
+            <Link
+              to="/review"
+              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+            >
+              去 Review
+            </Link>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-700/40 bg-slate-950/50 p-4">
+            <div className="text-xs text-slate-500">验收摘要</div>
+            <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-500">closure</div>
+                <div className="mt-1 text-slate-100">{caseSummary.closure_check_passed ? 'passed' : 'pending'}</div>
+              </div>
+              <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-3">
+                <div className="text-xs text-slate-500">outcomes</div>
+                <div className="mt-1 text-slate-100">{caseSummary.outcomes_generated}</div>
+              </div>
             </div>
           </div>
-        </div>
+
+          <div className="mt-4 space-y-3">
+            {artifacts.slice(0, 4).map((artifact) => (
+              <div key={`${artifact.name}-${artifact.path || artifact.updated}`} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+                <div className="text-sm text-slate-200">{artifact.name}</div>
+                <div className="mt-1 text-xs text-slate-500">{artifact.type || artifact.category || 'artifact'} · 更新于 {artifact.updated || artifact.updated_at || 'unknown'}</div>
+                {artifact.path ? (
+                  <div className="mt-3 flex items-center gap-3 text-xs">
+                    <button onClick={() => openPath(artifact.path)} className="text-hydro-400 hover:text-hydro-300 transition-colors">
+                      打开
+                    </button>
+                    <button onClick={() => revealPath(artifact.path)} className="text-slate-400 hover:text-slate-300 transition-colors">
+                      定位
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-500">等待真实 artifacts 落盘后提供定位。</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );

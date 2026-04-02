@@ -115,6 +115,77 @@ export function getDaduheShellEntryPoints(caseId = DADUHE_SHELL_CASE_ID) {
   ];
 }
 
+export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
+  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
+  const contracts = getDaduheRunReviewReleaseContracts(resolvedCaseId);
+  const assets = getDaduheReviewAssets(resolvedCaseId);
+
+  const launchContract = contracts.find((contract) => contract.stage === 'Run');
+  const reviewContract = contracts.find((contract) => contract.stage === 'Review');
+  const releaseContract = contracts.find((contract) => contract.stage === 'Release');
+  const liveDashboard = assets.find((asset) => asset.name === 'Live Dashboard HTML');
+  const verificationReport = assets.find((asset) => asset.name === 'Verification Report');
+  const coverageReport = assets.find((asset) => asset.name === 'Outcome Coverage Report');
+  const roadmap = assets.find((asset) => asset.name === 'Autonomy Roadmap');
+
+  return [
+    {
+      key: 'launch',
+      title: 'Launch',
+      route: '/simulation',
+      badge: launchContract?.status || 'pending',
+      summary: '从 pinned autonomy workflow 进入 daduhe 主链，先锁 WorkflowRun，再把执行日志与恢复命令绑回桌面壳。',
+      evidencePath: launchContract?.path,
+      evidenceLabel: launchContract?.contractName || 'WorkflowRun',
+      notes: [
+        '优先启动 autonomy_autorun / autonomy_assess',
+        '执行后第一时间绑定 log tail 与 resume prompt',
+      ],
+    },
+    {
+      key: 'monitor',
+      title: 'Monitor',
+      route: '/monitor',
+      badge: liveDashboard ? 'live_ready' : 'pending',
+      summary: '围绕 live dashboard、日志尾部、真实执行历史与 checkpoint 组织巡检，不再把监控入口散落在多个页面。',
+      evidencePath: liveDashboard?.path,
+      evidenceLabel: liveDashboard?.name || 'Live Dashboard',
+      notes: [
+        '把当前日志、checkpoint 和 artifacts 放在同一巡检面板',
+        '把值守动作收敛成“打开 / 定位 / 恢复”三类固定操作',
+      ],
+    },
+    {
+      key: 'review',
+      title: 'Review',
+      route: '/review',
+      badge: reviewContract?.status || 'pending',
+      summary: '让 verification、coverage、人工确认与 ReviewBundle 回到同一证据链，不再让审查入口飘在项目壳之外。',
+      evidencePath: verificationReport?.path || reviewContract?.path,
+      evidenceLabel: verificationReport?.name || reviewContract?.contractName || 'Review Bundle',
+      notes: [
+        '先核 verification / coverage，再回到人工确认项',
+        '围绕拓扑图、GIS 图与审查结论双向联动',
+      ],
+    },
+    {
+      key: 'release',
+      title: 'Release',
+      route: '/review',
+      badge: releaseContract?.status || 'pending',
+      summary: '把 ReleaseManifest、coverage、roadmap 和交付命令收束到同一壳层，形成可签发的 daduhe release 面。',
+      evidencePath: releaseContract?.path || coverageReport?.path,
+      evidenceLabel: releaseContract?.contractName || coverageReport?.name || 'Release Manifest',
+      notes: [
+        'release 入口必须绑定 contract triad 与 gate 结果',
+        'roadmap / backlog 保持为 release 前的唯一升级面',
+      ],
+      secondaryPath: roadmap?.path,
+      secondaryLabel: roadmap?.name || 'Autonomy Roadmap',
+    },
+  ];
+}
+
 export const daduheWavePlan = [
   {
     title: 'Wave 1',
