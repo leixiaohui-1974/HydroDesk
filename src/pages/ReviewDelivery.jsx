@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { openPath, revealPath } from '../api/tauri_bridge';
-import { getDaduheReviewAssets, getDaduheShellEntryPoints, resolveDaduheShellCaseId } from '../data/daduheShell';
+import {
+  getDaduheReviewAssets,
+  getDaduheRunReviewReleaseContracts,
+  getDaduheShellEntryPoints,
+  resolveDaduheShellCaseId,
+} from '../data/daduheShell';
 import { getActiveRoleAgent, getPendingApprovals, studioState } from '../data/studioState';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
@@ -85,6 +90,7 @@ export default function ReviewDelivery() {
   const roleTemplate = roleTemplates[activeRole] || roleTemplates.designer;
   const primaryAgent = getActiveRoleAgent('/review', activeRole);
   const latestRun = executionHistory[0];
+  const contractChain = getDaduheRunReviewReleaseContracts(shellCaseId);
   const liveMonitorAssets = getDaduheReviewAssets(shellCaseId);
   const shellEntryPoints = getDaduheShellEntryPoints(shellCaseId);
   const defaultSpotlight = useMemo(
@@ -218,6 +224,50 @@ export default function ReviewDelivery() {
         <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
           <h2 className="text-sm font-semibold text-slate-200">交付物与导出</h2>
           <div className="mt-1 text-xs text-slate-500">{loading ? '读取真实 artifacts 中...' : '优先展示真实案例产物'}</div>
+          <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">Run / Review / Release 合同链</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  先读 WorkflowRun，再核 ReviewBundle，最后从 ReleaseManifest 进入正式交付清单。
+                </div>
+              </div>
+              <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-300">
+                contract triad
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              {contractChain.map((contract) => (
+                <div key={contract.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-wider text-slate-500">{contract.stage}</div>
+                      <div className="mt-1 text-sm text-slate-200">{contract.contractName}</div>
+                    </div>
+                    <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
+                      {contract.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 text-xs leading-5 text-slate-500">{contract.note}</div>
+                  <div className="mt-3 text-[10px] leading-5 text-slate-500">{contract.path}</div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      onClick={() => openPath(contract.path)}
+                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
+                    >
+                      打开
+                    </button>
+                    <button
+                      onClick={() => revealPath(contract.path)}
+                      className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
+                    >
+                      定位
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="mt-4 rounded-2xl border border-hydro-500/20 bg-hydro-500/5 p-4">
             <div className="flex items-center justify-between gap-4">
               <div>

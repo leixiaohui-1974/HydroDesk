@@ -1,6 +1,12 @@
 import React from 'react';
 import { openPath, revealPath } from '../api/tauri_bridge';
-import { daduheWavePlan, getDaduheReviewAssets, getDaduheShellEntryPoints, resolveDaduheShellCaseId } from '../data/daduheShell';
+import {
+  daduheWavePlan,
+  getDaduheReviewAssets,
+  getDaduheRunReviewReleaseContracts,
+  getDaduheShellEntryPoints,
+  resolveDaduheShellCaseId,
+} from '../data/daduheShell';
 import { getActiveRoleAgent, studioState } from '../data/studioState';
 import { hydroPortfolioCatalog, primarySurfaceLabels } from '../data/projectPortfolio';
 import { executionSurfaceCatalog } from '../data/workflowSurfaces';
@@ -28,6 +34,7 @@ export default function ProjectCenter() {
     : caseSummary.gate_status === 'blocked'
       ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
       : 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+  const contractChain = getDaduheRunReviewReleaseContracts(shellCaseId);
   const reviewAssets = getDaduheReviewAssets(shellCaseId);
   const shellEntryPoints = getDaduheShellEntryPoints(shellCaseId);
 
@@ -192,6 +199,47 @@ export default function ProjectCenter() {
               <div className="mt-2 text-xs text-slate-400">文件: {project.files.join(' · ')}</div>
               <div className="mt-3 rounded-xl border border-slate-700/40 bg-slate-950/60 p-3 text-xs leading-5 text-slate-400">
                 {project.daduheFocus}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-200">Run / Review / Release 合同链</h2>
+            <p className="mt-1 text-xs text-slate-500">把 daduhe 当前运行、审查和交付 contract 固定成 HydroDesk 可追踪的三段式链路。</p>
+          </div>
+          <span className="text-xs text-slate-500">hydromind-contracts aligned</span>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-4">
+          {contractChain.map((contract) => (
+            <div key={contract.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-slate-500">{contract.stage}</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">{contract.contractName}</div>
+                </div>
+                <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
+                  {contract.status}
+                </span>
+              </div>
+              <div className="mt-3 text-xs leading-5 text-slate-400">{contract.note}</div>
+              <div className="mt-3 text-[10px] leading-5 text-slate-500">{contract.path}</div>
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  onClick={() => openPath(contract.path)}
+                  className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
+                >
+                  打开
+                </button>
+                <button
+                  onClick={() => revealPath(contract.path)}
+                  className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
+                >
+                  定位
+                </button>
               </div>
             </div>
           ))}

@@ -4,6 +4,37 @@ export function resolveDaduheShellCaseId(caseId) {
   return caseId === DADUHE_SHELL_CASE_ID ? caseId : DADUHE_SHELL_CASE_ID;
 }
 
+export function getDaduheRunReviewReleaseContracts(caseId = DADUHE_SHELL_CASE_ID) {
+  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
+
+  return [
+    {
+      stage: 'Run',
+      contractName: 'WorkflowRun',
+      path: `cases/${resolvedCaseId}/contracts/workflow_run.json`,
+      status: 'completed_with_review',
+      category: 'run',
+      note: '锁定 daduhe 当前 workflow 的 inputs / outputs / steps，作为后续 review 与 release 的唯一运行引用。',
+    },
+    {
+      stage: 'Review',
+      contractName: 'ReviewBundle',
+      path: `cases/${resolvedCaseId}/contracts/review_bundle.json`,
+      status: 'pending',
+      category: 'review',
+      note: '承接人工复核 verdict、findings 和报告附件，把审查结论从 live 监控切回正式 contract。',
+    },
+    {
+      stage: 'Release',
+      contractName: 'ReleaseManifest',
+      path: `cases/${resolvedCaseId}/contracts/release_manifest.json`,
+      status: 'review_pending',
+      category: 'release',
+      note: '把 run/review 与 dashboard、verification、coverage 资产收口成 HydroDesk shell 可交付的 release 包。',
+    },
+  ];
+}
+
 export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
   const resolvedCaseId = resolveDaduheShellCaseId(caseId);
 
