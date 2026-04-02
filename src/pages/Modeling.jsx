@@ -1,4 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { openPath, revealPath } from '../api/tauri_bridge';
+import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
+import { daduheEvidenceWorkflowOrder, getDaduheWorkflowEvidence } from '../data/daduheWorkflowEvidence';
 import ComponentLibrary from '../features/modeling/ComponentLibrary';
 import ModelCanvas from '../features/modeling/ModelCanvas';
 
@@ -7,9 +11,15 @@ import ModelCanvas from '../features/modeling/ModelCanvas';
  * Left: component library | Center: canvas | Right: properties | Bottom: toolbar
  */
 export default function Modeling() {
+  const { activeProject } = useStudioWorkspace();
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [placedComponents, setPlacedComponents] = useState([]);
   const [selectedPlaced, setSelectedPlaced] = useState(null);
+  const [selectedEvidenceWorkflow, setSelectedEvidenceWorkflow] = useState(daduheEvidenceWorkflowOrder[0]);
+  const workflowEvidence = useMemo(
+    () => getDaduheWorkflowEvidence(selectedEvidenceWorkflow),
+    [selectedEvidenceWorkflow]
+  );
 
   const handleComponentSelect = (component) => {
     setSelectedComponent(component);
@@ -47,15 +57,107 @@ export default function Modeling() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 bg-slate-800/30 shrink-0">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">模型构建</h1>
-          <p className="text-xs text-slate-500">拖放组件构建水网模型 (Drag & drop to build water network models)</p>
+          <h1 className="text-lg font-semibold text-slate-100">拓扑与 GIS 建模</h1>
+          <p className="text-xs text-slate-500">拖放组件构建水网拓扑，并作为后续 GIS 与工作流执行的图形入口</p>
         </div>
         <div className="flex items-center gap-2">
+          <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300">
+            case {activeProject.caseId}
+          </span>
           <span className="text-xs text-slate-500">
             已放置 {placedComponents.length} 个组件
           </span>
         </div>
       </div>
+
+      {activeProject.caseId === 'daduhe' && (
+        <section className="border-b border-slate-700/50 bg-slate-900/40 px-4 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <div className="text-xs uppercase tracking-[0.28em] text-hydro-300">daduhe evidence navigator</div>
+              <h2 className="mt-2 text-base font-semibold text-slate-100">把 workflow 结果回链到拓扑 / GIS / 审查证据</h2>
+              <p className="mt-2 text-xs leading-6 text-slate-400">{workflowEvidence.headline}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                to="/simulation"
+                className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+              >
+                工作流执行
+              </Link>
+              <Link
+                to="/review"
+                className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+              >
+                审查交付
+              </Link>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {daduheEvidenceWorkflowOrder.map((workflow) => {
+              const evidence = getDaduheWorkflowEvidence(workflow);
+              const selected = workflow === selectedEvidenceWorkflow;
+              return (
+                <button
+                  key={workflow}
+                  onClick={() => setSelectedEvidenceWorkflow(workflow)}
+                  className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                    selected
+                      ? 'border-hydro-500/40 bg-hydro-500/10 text-hydro-300'
+                      : 'border-slate-700/50 bg-slate-900/60 text-slate-300 hover:bg-slate-800/60'
+                  }`}
+                >
+                  {evidence.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-4">
+            {workflowEvidence.groups.map((group) => (
+              <div key={group.id} className="rounded-2xl border border-slate-700/40 bg-slate-950/50 p-4">
+                <div className="text-sm font-medium text-slate-100">{group.title}</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">{group.summary}</div>
+                <div className="mt-4 space-y-3">
+                  {group.items.map((item) => (
+                    <div key={item.path} className="rounded-xl border border-slate-700/40 bg-slate-900/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold text-slate-100">{item.title}</div>
+                          <div className="mt-1 text-[11px] text-hydro-300">{item.focus}</div>
+                        </div>
+                        <Link
+                          to={item.route}
+                          className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 transition-colors hover:bg-slate-800/60"
+                        >
+                          {item.routeLabel}
+                        </Link>
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-slate-400">{item.detail}</div>
+                      <div className="mt-2 break-all text-[11px] leading-5 text-slate-500">{item.path}</div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          onClick={() => openPath(item.path)}
+                          className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+                        >
+                          打开资产
+                        </button>
+                        <button
+                          onClick={() => revealPath(item.path)}
+                          className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+                        >
+                          定位路径
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Main area: three panels */}
       <div className="flex flex-1 overflow-hidden">
