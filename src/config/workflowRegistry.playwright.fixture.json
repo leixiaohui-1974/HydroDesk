@@ -1,0 +1,296 @@
+[
+  {
+    "name": "assimilate",
+    "description": "多方法数据同化比选（EKF/EnKF/PF/3DVar × 水文/水动力/耦合）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "autonomy_assess",
+    "description": "端到端自主运行能力评估与闭环建议",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "autonomy_autorun",
+    "description": "端到端自治闭环自动执行（评估→动作→再评估）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "calibrate",
+    "description": "逐站率定验证",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "cascade",
+    "description": "梯级全自主运行（10阶段编排）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "case01_local_ext",
+    "description": "pipedream case01 本地运行",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "consolidate",
+    "description": "知识固化（合约→YAML 持久化，多版本+会话追踪）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "coupled",
+    "description": "水文→水力学耦合（D1 出流驱动 D2 水位模拟）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "d1d4",
+    "description": "D1-D4 全维度精度分析报告",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_ekf_mpc_ext",
+    "description": "大渡河 EKF+MPC（legacy 包装 run_ekf_mpc）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_full_pipeline_ext",
+    "description": "大渡河 pipedream 全链路 pipeline（legacy 脚本）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_historical_validation_ext",
+    "description": "大渡河历史年景验证（legacy）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_hydro_coupling_ext",
+    "description": "水文→水力耦合（承接 daduhe_hydro_coupling_ext 注册键，等价 coupled）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_pipedream_ext",
+    "description": "大渡河 SuperLink 仿真闭环（legacy）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "daduhe_real_validation_ext",
+    "description": "大渡河真实验证入口（legacy 包装 run_real_validation）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "data_audit",
+    "description": "数据质量审计（完整性/合理性/一致性/负值/缺口诊断）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "deep_record",
+    "description": "深度资产记录（一次扫描全部数据永久写入YAML）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "dl_autolearn",
+    "description": "DL 自学习闭环（诊断→弱点识别→超参搜索→择优→固化）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "dl_forecast",
+    "description": "DL 时序预测（LSTM/Transformer/TimesFM 多模型自动比选）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "dl_transfer",
+    "description": "迁移学习（多站预训练 → 新流域微调/零样本，跨流域推广）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "ensemble_forecast",
+    "description": "嵌套集合预报（长中短 × 多模型 × 不确定性量化 × 可靠性评价）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "hil_acceptance_test_ext",
+    "description": "HIL 验收测试演练",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "hyd_cal",
+    "description": "水力学历史率定验证（水库水量平衡 × 逐站自提升）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "hyd_report",
+    "description": "D2 水力学精度评价报告（MD + JSON，含建模思路）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "hyd_sim",
+    "description": "水力学梯级联合模拟（回溯/级联/场景）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "hydro_report",
+    "description": "D1 水文精度评价报告（多源择优 MD + 知识固化）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "improve",
+    "description": "精度自提升（多策略×多分辨率自动择优）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "init",
+    "description": "案例初始化（从 wxq-1d 数据自动生成配置+目录）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "knowledge_mine",
+    "description": "模型知识挖掘（原始资产→YAML 知识层）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "knowledge_split",
+    "description": "知识分层迁移（单文件 YAML 拆分为知识目录）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "model",
+    "description": "水文+水动力建模（含流域划分）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "mrc_rehearsal_ext",
+    "description": "MRC 四态机演练（pipedream）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "pipedream_report_ext",
+    "description": "pipedream 报告生成",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "pipeline",
+    "description": "自学习自提升管线（迭代收敛引擎）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "registry",
+    "description": "知识注册表（资产→脚本→结果→精度 全链路索引+去重保护）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "section_analysis",
+    "description": "断面分析产品（多源解析→水力曲线→5维质量评估→知识固化）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "selfdiag",
+    "description": "水动力自诊断自修复（边界/水位/收敛/几何自动检测+修复）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "source_to_delineation",
+    "description": "端到端地形链路（源发现→数据包→流域划分）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "state_est",
+    "description": "D4 状态估计 EKF（水位校正+精度评价）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "strict_revalidation_ext",
+    "description": "E2E 严格复核验证",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "wnal_evaluation_ext",
+    "description": "五案例 WNAL 综合评价（pipedream）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "wxq_mine",
+    "description": "WXQ 模型知识挖掘（knowledge_mine 别名，供 MCP/E2E 主键一致）",
+    "required_args": [
+      "case_id"
+    ]
+  }
+]

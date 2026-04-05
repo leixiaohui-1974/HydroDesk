@@ -8,7 +8,7 @@ export const hydroPortfolioCatalog = [
     summary: '统一承接 case、workflow registry、outcome contract、verification report 和 hm MCP 工具。',
     directories: ['workflows/', 'hydro_model/', 'cases/', 'tests/'],
     files: ['workflows/__init__.py', 'mcp_server.py', 'configs/agent_registry.yaml'],
-    daduheFocus: '大渡河 E2E 的主索引、主合同和 outcome gate 都在这里汇总。',
+    integrationNote: 'Rollout 案例 E2E 的主索引、主合同与 outcome gate 在这里汇总。',
   },
   {
     id: 'hydrodesk',
@@ -19,7 +19,7 @@ export const hydroPortfolioCatalog = [
     summary: 'React + Tauri 主壳，负责跨项目浏览、工作流启动、产物查看和 operator-facing orchestration。',
     directories: ['src/pages/', 'src/hooks/', 'src-tauri/src/'],
     files: ['src/pages/ProjectCenter.jsx', 'src/pages/Simulation.jsx', 'src-tauri/src/main.rs'],
-    daduheFocus: '把 daduhe 的 contracts、verification、workflow surfaces 和项目群编排暴露给桌面用户。',
+    integrationNote: '把各案例 contracts、verification、workflow surfaces 与项目群编排暴露给桌面用户。',
   },
   {
     id: 'pipedream',
@@ -27,10 +27,10 @@ export const hydroPortfolioCatalog = [
     path: 'pipedream-hydrology-integration-lab',
     role: '闭环仿真、运行时编排与 SuperLink 求解',
     primarySurface: 'product',
-    summary: '运行时编排、控制器 runner、solver engine 和 daduhe_case 等闭环仿真能力集中在这里。',
+    summary: '运行时编排、控制器 runner、solver engine 与示范闭环案例模块等能力集中在这里。',
     directories: ['pipedream_platform/runtime/', 'pipedream_platform/solver/', 'universal_autonomous_architecture/'],
     files: ['pipedream_platform/runtime/orchestration.py', 'pipedream_platform/runtime/controller_runner.py', 'universal_autonomous_architecture/daduhe_case.py'],
-    daduheFocus: 'daduhe_pipedream_ext 这条大渡河闭环仿真链路由它主导。',
+    integrationNote: 'pipedream 侧闭环仿真链（如 daduhe_pipedream_ext 注册键）由它主导执行与编排。',
   },
   {
     id: 'e2econtrol',
@@ -41,7 +41,7 @@ export const hydroPortfolioCatalog = [
     summary: 'HydroE2E 的控制、复核、phase5 验证和脚本化 acceptance gate 在这里落地。',
     directories: ['hydroe2e/phase5/', 'scripts/', 'tests/'],
     files: ['scripts/run_strict_revalidation.py', 'tests/test_revalidation_scripts_regression.py', 'hydroe2e/phase5/'],
-    daduheFocus: 'strict_revalidation_ext、real/historical validation、ekf_mpc 等大渡河验证链路主要依赖这里。',
+    integrationNote: 'strict_revalidation_ext、real/historical validation、ekf_mpc 等验证链路主要依赖这里。',
   },
   {
     id: 'hil',
@@ -52,7 +52,7 @@ export const hydroPortfolioCatalog = [
     summary: '验收脚本、测试工况、报告生成和 HIL/MBD 实验资产在这里。',
     directories: ['examples/', 'src/test_cases/', 'src/report_generator.py'],
     files: ['examples/run_acceptance_test.py', 'src/test_cases/', 'src/report_generator.py'],
-    daduheFocus: 'hil_acceptance_test_ext 直接复用了这里的数字 FAT 流程。',
+    integrationNote: 'hil_acceptance_test_ext 直接复用了这里的数字 FAT 流程。',
   },
   {
     id: 'hydromas',
@@ -63,7 +63,7 @@ export const hydroPortfolioCatalog = [
     summary: 'L2 MCP tool layer、L3 skill layer、L4 cognitive layer 的系统化组合能力在这里最完整。',
     directories: ['agents/', 'skills/', 'web/'],
     files: ['README.md', 'agents/', 'skills/'],
-    daduheFocus: '适合承接跨 workflow 的编排、会商、调度和认知层协作，但不应替代确定性产品工作流。',
+    integrationNote: '适合承接跨 workflow 的编排、会商、调度和认知层协作，但不应替代确定性产品工作流。',
   },
   {
     id: 'yjdt',
@@ -74,7 +74,7 @@ export const hydroPortfolioCatalog = [
     summary: '分层控制、场景生成、数字孪生和安全分析能力，适合作为调度/控制类扩展参考面。',
     directories: ['src/', 'tests/'],
     files: ['README.md', 'src/', 'tests/'],
-    daduheFocus: '可为后续梯级调度、ODD 和极端工况验证提供可迁移模式。',
+    integrationNote: '可为后续梯级调度、ODD 和极端工况验证提供可迁移模式。',
   },
   {
     id: 'contracts',
@@ -85,7 +85,7 @@ export const hydroPortfolioCatalog = [
     summary: '程序级 Case/Data Pack/Run/Review/Release 契约和 protocol contracts 在这里统一沉淀。',
     directories: ['hydromind_contracts/', 'docs/'],
     files: ['README.md', 'hydromind_contracts/program_contracts.py', 'hydromind_contracts/program_validation.py'],
-    daduheFocus: 'HydroDesk 最终要把 daduhe 的 run/review/release 读写都对齐到这层契约。',
+    integrationNote: 'HydroDesk 最终要把各案例 run/review/release 读写对齐到这层契约。',
   },
 ];
 

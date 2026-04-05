@@ -1,0 +1,7 @@
+{
+  "contract_version": "1.0",
+  "summary_relative": "cases/{caseId}/contracts/scada_replay.latest.json",
+  "stream_ndjson_relative": "cases/{caseId}/contracts/scada_replay.stream.ndjson",
+  "schema_summary_repo_relative": "Hydrology/configs/scada_replay_summary.schema.json",
+  "schema_stream_event_repo_relative": "Hydrology/configs/scada_replay_stream_event.schema.json"
+}

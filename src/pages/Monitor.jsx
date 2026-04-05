@@ -4,6 +4,7 @@ import { getPendingApprovals, getRunningTasks, studioState } from '../data/studi
 import { useStudioRuntime } from '../hooks/useStudioRuntime';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
+import ScadaReplayMonitorBlock from '../components/ScadaReplayMonitorBlock';
 
 const StationCard = ({ station, onClick, isSelected }) => {
   const statusStyles = {
@@ -144,6 +145,8 @@ export default function Monitor() {
               )}
             </div>
           </div>
+
+          <ScadaReplayMonitorBlock caseId={activeProject.caseId} />
 
           <div>
             <h2 className="text-sm font-semibold text-slate-300 mb-3">

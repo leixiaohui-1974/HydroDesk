@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getHydrologyWorkflows, getRuntimeSnapshot } from '../api/tauri_bridge';
+import { isPlaywrightBrowserFixtureEnabled } from '../config/playwrightEnvGate';
 import { getPendingApprovals, getRunningTasks, studioState } from '../data/studioState';
+import workflowRegistryPlaywrightFixture from '../config/workflowRegistry.playwright.fixture.json';
 
 const workflowFallback = studioState.workflowRuns.map((workflow) => ({
   name: workflow.name,
   description: workflow.type,
   required_args: ['case_id'],
   kind: 'fallback',
+}));
+
+/** 与 Hydrology WORKFLOW_REGISTRY 同构（由 scripts/export_workflow_registry_playwright_fixture.py 生成） */
+const playwrightWorkflowRegistry = workflowRegistryPlaywrightFixture.map((w) => ({
+  name: w.name,
+  description: w.description,
+  required_args: Array.isArray(w.required_args) && w.required_args.length ? w.required_args : ['case_id'],
+  kind: 'playwright_registry_fixture',
 }));
 
 const runtimeFallback = {
@@ -35,6 +45,12 @@ export function useStudioRuntime(pollMs = 5000) {
 
   const load = useCallback(async () => {
     try {
+      if (isPlaywrightBrowserFixtureEnabled()) {
+        setWorkflows(playwrightWorkflowRegistry);
+        setRuntimeSnapshot(runtimeFallback);
+        return;
+      }
+
       const [workflowResult, runtimeResult] = await Promise.all([
         getHydrologyWorkflows(workflowFallback),
         getRuntimeSnapshot(runtimeFallback),

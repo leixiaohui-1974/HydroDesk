@@ -1,26 +1,61 @@
-const DADUHE_SHELL_CASE_ID = 'daduhe';
+import {
+  getBuildReleaseManifestScriptRelPath,
+  getBuildReviewBundleScriptRelPath,
+  getHydrodeskFusionPlanDocRelPath,
+  getRunCasePipelineScriptRelPath,
+} from '../config/hydrodesk_commands';
 
-export function resolveDaduheShellCaseId(caseId) {
-  return caseId === DADUHE_SHELL_CASE_ID ? caseId : DADUHE_SHELL_CASE_ID;
+/**
+ * 合同 JSON 双轨：优先 canonical `*.json`，打开/读取可回退到 `*.contract.json`。
+ * @param {string} canonicalPath 仓库根相对路径
+ * @returns {string[]}
+ */
+export function contractJsonPathAlternates(canonicalPath) {
+  const trimmed = String(canonicalPath ?? '').trim();
+  if (!trimmed.endsWith('.json')) return [trimmed];
+  if (trimmed.endsWith('.contract.json')) return [trimmed];
+  const base = trimmed.slice(0, -'.json'.length);
+  return [trimmed, `${base}.contract.json`];
 }
 
-export function getDaduheRunReviewReleaseContracts(caseId = DADUHE_SHELL_CASE_ID) {
-  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
+/** 约定：自主路线图文件名 `cases/<case_id>/contracts/<case_id>_hydrodesk_autonomy_roadmap.md` */
+function caseAutonomyRoadmapContractPath(caseId) {
+  return `cases/${caseId}/contracts/${caseId}_hydrodesk_autonomy_roadmap.md`;
+}
+
+/**
+ * 解析桌面壳使用的 case_id：优先当前项目，其次 VITE_HYDRODESK_DEFAULT_CASE_ID，否则空字符串。
+ * @param {string | undefined | null} caseId
+ */
+export function resolveShellCaseId(caseId) {
+  const raw = caseId != null ? String(caseId).trim() : '';
+  if (raw) return raw;
+  return import.meta.env?.VITE_HYDRODESK_DEFAULT_CASE_ID?.trim?.() || '';
+}
+
+export function getCaseRunReviewReleaseContracts(caseId) {
+  const resolvedCaseId = resolveShellCaseId(caseId);
   const contractRoot = `cases/${resolvedCaseId}/contracts`;
+
+  const runPath = `${contractRoot}/workflow_run.json`;
+  const reviewPath = `${contractRoot}/review_bundle.json`;
+  const releasePath = `${contractRoot}/release_manifest.json`;
 
   return [
     {
       stage: 'Run',
       contractName: 'WorkflowRun',
-      path: `${contractRoot}/workflow_run.json`,
+      path: runPath,
+      pathAlternates: contractJsonPathAlternates(runPath),
       status: 'completed_with_review',
       category: 'run',
-      note: '以 CaseManifest + DataPack 为输入锚点，锁定 daduhe 当前 run_id、steps 与 outputs，作为 Review / Release 的唯一运行引用。',
+      note: `以 CaseManifest + DataPack 为输入锚点，锁定 ${resolvedCaseId || '当前案例'} 的 run_id、steps 与 outputs，作为 Review / Release 的唯一运行引用。`,
     },
     {
       stage: 'Review',
       contractName: 'ReviewBundle',
-      path: `${contractRoot}/review_bundle.json`,
+      path: reviewPath,
+      pathAlternates: contractJsonPathAlternates(reviewPath),
       status: 'review_pending',
       category: 'review',
       note: '把 verdict、findings、coverage、verification 与 live dashboard 资产收束到正式 ReviewBundle，形成可追踪的审查对象。',
@@ -28,7 +63,8 @@ export function getDaduheRunReviewReleaseContracts(caseId = DADUHE_SHELL_CASE_ID
     {
       stage: 'Release',
       contractName: 'ReleaseManifest',
-      path: `${contractRoot}/release_manifest.json`,
+      path: releasePath,
+      pathAlternates: contractJsonPathAlternates(releasePath),
       status: 'review_pending',
       category: 'release',
       note: '把 Case / Data Pack / Run / Review 与 dashboard、verification、coverage 资产收口成 HydroDesk shell 的可交付 release 包。',
@@ -36,13 +72,20 @@ export function getDaduheRunReviewReleaseContracts(caseId = DADUHE_SHELL_CASE_ID
   ];
 }
 
-export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
-  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
+export function getCaseReviewAssets(caseId) {
+  const resolvedCaseId = resolveShellCaseId(caseId);
+  const fusionDoc = getHydrodeskFusionPlanDocRelPath();
 
   return [
     {
+      name: 'Raw Ingest 目录',
+      note: `Karpathy 式未编译资料槽位（与 knowledge_lint.raw_dir_rel 一致；目录内大文件默认 .gitignore，仅 .gitkeep 入库）。`,
+      path: `cases/${resolvedCaseId}/ingest/raw`,
+      category: 'knowledge',
+    },
+    {
       name: 'Live Dashboard HTML',
-      note: '端到端实时监控面，适合直接盯 daduhe 当前进度与 agent 结果。',
+      note: `端到端实时监控面，适合直接盯 ${resolvedCaseId || '当前案例'} 进度与 agent 结果。`,
       path: `cases/${resolvedCaseId}/contracts/E2E_LIVE_DASHBOARD.html`,
       category: 'live',
     },
@@ -60,7 +103,7 @@ export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
     },
     {
       name: 'Verification Report',
-      note: '看 daduhe 阶段化验收结论与 execution integrity。',
+      note: `看 ${resolvedCaseId || '当前案例'} 阶段化验收结论与 execution integrity。`,
       path: `cases/${resolvedCaseId}/contracts/e2e_outcome_verification_report.json`,
       category: 'gate',
     },
@@ -78,67 +121,74 @@ export function getDaduheReviewAssets(caseId = DADUHE_SHELL_CASE_ID) {
     },
     {
       name: 'Autonomy Roadmap',
-      note: '看大渡河自主运行水网模型体系与 HydroDesk 端到端测试壳的主路线图。',
-      path: `cases/${resolvedCaseId}/contracts/daduhe_hydrodesk_autonomy_roadmap.md`,
+      note: '自主运行水网模型体系与 HydroDesk 端到端测试壳的主路线图。',
+      path: caseAutonomyRoadmapContractPath(resolvedCaseId),
       category: 'roadmap',
     },
     {
       name: 'HydroDesk Fusion Backlog',
       note: '看 HydroDesk 壳层接下来要补的 backlog、职责边界和融合任务。',
-      path: 'HydroDesk/docs/daduhe-e2e-fusion-plan.md',
+      path: fusionDoc,
       category: 'backlog',
     },
   ];
 }
 
-export function getDaduheShellEntryPoints(caseId = DADUHE_SHELL_CASE_ID) {
-  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
-  const reviewAssets = getDaduheReviewAssets(caseId);
+export function getCaseShellEntryPoints(caseId) {
+  const resolvedCaseId = resolveShellCaseId(caseId);
+  const reviewAssets = getCaseReviewAssets(caseId);
+  const fusionDoc = getHydrodeskFusionPlanDocRelPath();
 
   return [
     {
       title: 'Run Entry',
-      summary: `以 daduhe case shell 为入口触发 Run 阶段，固定产出 cases/${resolvedCaseId}/contracts/workflow_run.json。`,
-      path: 'Hydrology/workflows/run_case_pipeline.py',
+      summary: `以 case shell 为入口触发 Run 阶段，固定产出 cases/${resolvedCaseId}/contracts/workflow_run.json。`,
+      path: getRunCasePipelineScriptRelPath(),
       kind: 'command',
     },
     {
       title: 'Review Entry',
       summary: `以 ReviewBundle 为正式审查对象，把 verification / coverage / dashboard 资产绑定回 cases/${resolvedCaseId}/contracts/review_bundle.json。`,
-      path: 'Hydrology/workflows/build_review_bundle.py',
+      path: getBuildReviewBundleScriptRelPath(),
       kind: 'command',
     },
     {
       title: 'Release Entry',
       summary: `以 ReleaseManifest 收束 Case / Data Pack / Run / Review 链路，生成 cases/${resolvedCaseId}/contracts/release_manifest.json。`,
-      path: 'Hydrology/workflows/build_release_manifest.py',
+      path: getBuildReleaseManifestScriptRelPath(),
       kind: 'command',
     },
     {
       title: 'North Star',
-      summary: '以 daduhe 为唯一验收 case 的主路线图，定义 shell、主链、release gate 的完成标准。',
+      summary: `以 ${resolvedCaseId || '当前案例'} 为主验收案例的路线图，定义 shell、主链、release gate 的完成标准。`,
       path: reviewAssets.find((asset) => asset.name === 'Autonomy Roadmap')?.path,
       kind: 'roadmap',
     },
     {
       title: 'Fusion Backlog',
       summary: 'HydroDesk 壳层当前 backlog，聚焦 shell 收口、contract 接入和产品化入口。',
-      path: 'HydroDesk/docs/daduhe-e2e-fusion-plan.md',
+      path: fusionDoc,
       kind: 'backlog',
     },
     {
+      title: 'Raw Ingest',
+      summary: `原始剪藏 / PDF / 笔记先入 cases/${resolvedCaseId}/ingest/raw，再由 Agent 编译进 contracts；与 hydrodesk_shell.knowledge_lint 对齐。`,
+      path: `cases/${resolvedCaseId}/ingest/raw`,
+      kind: 'knowledge',
+    },
+    {
       title: 'Program Roadmap',
-      summary: '项目群级别路线图，说明 daduhe 在整个 HydroMind 项目群中的阶段位置。',
+      summary: '项目群级别路线图，说明当前案例在整个 HydroMind 项目群中的阶段位置。',
       path: '.planning/ROADMAP.md',
       kind: 'program',
     },
   ];
 }
 
-export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
-  const resolvedCaseId = resolveDaduheShellCaseId(caseId);
-  const contracts = getDaduheRunReviewReleaseContracts(resolvedCaseId);
-  const assets = getDaduheReviewAssets(resolvedCaseId);
+export function getCaseWorkbenchStages(caseId) {
+  const resolvedCaseId = resolveShellCaseId(caseId);
+  const contracts = getCaseRunReviewReleaseContracts(resolvedCaseId);
+  const assets = getCaseReviewAssets(resolvedCaseId);
 
   const launchContract = contracts.find((contract) => contract.stage === 'Run');
   const reviewContract = contracts.find((contract) => contract.stage === 'Review');
@@ -148,14 +198,37 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
   const coverageReport = assets.find((asset) => asset.name === 'Outcome Coverage Report');
   const roadmap = assets.find((asset) => asset.name === 'Autonomy Roadmap');
 
+  const launchAlts = launchContract?.pathAlternates?.length
+    ? launchContract.pathAlternates
+    : launchContract?.path
+      ? contractJsonPathAlternates(launchContract.path)
+      : [];
+  const reviewEvidencePath = verificationReport?.path || reviewContract?.path;
+  const reviewEvidenceAlts = verificationReport?.path
+    ? [verificationReport.path]
+    : reviewContract?.pathAlternates?.length
+      ? reviewContract.pathAlternates
+      : reviewContract?.path
+        ? contractJsonPathAlternates(reviewContract.path)
+        : [];
+  const releaseEvidencePath = releaseContract?.path || coverageReport?.path;
+  const releaseEvidenceAlts = releaseContract?.path
+    ? releaseContract.pathAlternates?.length
+      ? releaseContract.pathAlternates
+      : contractJsonPathAlternates(releaseContract.path)
+    : coverageReport?.path
+      ? [coverageReport.path]
+      : [];
+
   return [
     {
       key: 'launch',
       title: 'Launch',
       route: '/simulation',
       badge: launchContract?.status || 'pending',
-      summary: '从 pinned autonomy workflow 进入 daduhe 主链，先锁 WorkflowRun，再把执行日志与恢复命令绑回桌面壳。',
+      summary: `从 pinned autonomy workflow 进入 ${resolvedCaseId || '当前案例'} 主链，先锁 WorkflowRun，再把执行日志与恢复命令绑回桌面壳。`,
       evidencePath: launchContract?.path,
+      evidencePathAlternates: launchAlts.filter(Boolean),
       evidenceLabel: launchContract?.contractName || 'WorkflowRun',
       notes: [
         '优先启动 autonomy_autorun / autonomy_assess',
@@ -169,6 +242,7 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
       badge: liveDashboard ? 'live_ready' : 'pending',
       summary: '围绕 live dashboard、日志尾部、真实执行历史与 checkpoint 组织巡检，不再把监控入口散落在多个页面。',
       evidencePath: liveDashboard?.path,
+      evidencePathAlternates: liveDashboard?.path ? [liveDashboard.path] : [],
       evidenceLabel: liveDashboard?.name || 'Live Dashboard',
       notes: [
         '把当前日志、checkpoint 和 artifacts 放在同一巡检面板',
@@ -181,7 +255,8 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
       route: '/review',
       badge: reviewContract?.status || 'pending',
       summary: '让 verification、coverage、人工确认与 ReviewBundle 回到同一证据链，不再让审查入口飘在项目壳之外。',
-      evidencePath: verificationReport?.path || reviewContract?.path,
+      evidencePath: reviewEvidencePath,
+      evidencePathAlternates: reviewEvidenceAlts.filter(Boolean),
       evidenceLabel: verificationReport?.name || reviewContract?.contractName || 'Review Bundle',
       notes: [
         '先核 verification / coverage，再回到人工确认项',
@@ -193,8 +268,9 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
       title: 'Release',
       route: '/review',
       badge: releaseContract?.status || 'pending',
-      summary: '把 ReleaseManifest、coverage、roadmap 和交付命令收束到同一壳层，形成可签发的 daduhe release 面。',
-      evidencePath: releaseContract?.path || coverageReport?.path,
+      summary: `把 ReleaseManifest、coverage、roadmap 和交付命令收束到同一壳层，形成可签发的 ${resolvedCaseId || '当前案例'} release 面。`,
+      evidencePath: releaseEvidencePath,
+      evidencePathAlternates: releaseEvidenceAlts.filter(Boolean),
       evidenceLabel: releaseContract?.contractName || coverageReport?.name || 'Release Manifest',
       notes: [
         'release 入口必须绑定 contract triad 与 gate 结果',
@@ -206,7 +282,7 @@ export function getDaduheWorkbenchStages(caseId = DADUHE_SHELL_CASE_ID) {
   ];
 }
 
-export function resolveDaduheWorkbenchStageKey(path = '') {
+export function resolveWorkbenchStageKey(path = '') {
   if (path.startsWith('/simulation')) {
     return 'launch';
   }
@@ -222,9 +298,9 @@ export function resolveDaduheWorkbenchStageKey(path = '') {
   return null;
 }
 
-export function getDaduheWorkbenchRail(caseId = DADUHE_SHELL_CASE_ID, path = '/workbench') {
-  const stages = getDaduheWorkbenchStages(caseId);
-  const activeStageKey = resolveDaduheWorkbenchStageKey(path);
+export function getCaseWorkbenchRail(caseId, path = '/workbench') {
+  const stages = getCaseWorkbenchStages(caseId);
+  const activeStageKey = resolveWorkbenchStageKey(path);
   const activeIndex = stages.findIndex((stage) => stage.key === activeStageKey);
 
   return stages.map((stage, index) => {
@@ -250,14 +326,15 @@ export function getDaduheWorkbenchRail(caseId = DADUHE_SHELL_CASE_ID, path = '/w
   });
 }
 
-export const daduheWavePlan = [
+/** 交付波次计划（与具体案例 id 无关，仅作 Studio 展示） */
+export const studioDeliveryWavePlan = [
   {
     title: 'Wave 1',
     items: ['修 agent teams runtime', '收口 prompt worker lifecycle', '补 runtime regression probes'],
   },
   {
     title: 'Wave 2-4',
-    items: ['清理 daduhe outcome 结果资产', '收敛 autonomy chain', '把 HydroDesk 做成端到端测试壳'],
+    items: ['清理 outcome 结果资产', '收敛 autonomy chain', '把 HydroDesk 做成端到端测试壳'],
   },
   {
     title: 'Wave 5-6',

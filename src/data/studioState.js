@@ -1,3 +1,16 @@
+import rolloutRegistry from '../config/playwrightRollout.generated.json';
+
+const _rolloutFirst = Array.isArray(rolloutRegistry.registry) ? rolloutRegistry.registry[0] : null;
+const _dacRaw = rolloutRegistry.default_active_case_id;
+const _dac =
+  typeof _dacRaw === 'string' && _dacRaw.trim() ? String(_dacRaw).trim() : null;
+const _entryFromDefault =
+  _dac && Array.isArray(rolloutRegistry.registry)
+    ? rolloutRegistry.registry.find((r) => r.caseId === _dac)
+    : null;
+const _defaultRolloutCaseId = _entryFromDefault?.caseId || _rolloutFirst?.caseId || 'daduhe';
+const _defaultRolloutName = _entryFromDefault?.name || _rolloutFirst?.name || 'Rollout 首选案例';
+
 export const studioState = {
   workspace: {
     id: 'workspace-research',
@@ -59,7 +72,13 @@ export const studioState = {
     },
   },
   projects: [
-    { id: 'proj-001', name: '大渡河自主运行验收壳', stage: '端到端验收', caseId: 'daduhe', status: 'active' },
+    {
+      id: 'proj-001',
+      name: `${_defaultRolloutName} · 自主运行验收壳`,
+      stage: '端到端验收',
+      caseId: _defaultRolloutCaseId,
+      status: 'active',
+    },
     { id: 'proj-002', name: '引江济淮调度推演', stage: '方案对比', caseId: 'case-yjjh-2026-02', status: 'review' },
     { id: 'proj-003', name: '山区流域自动建模试点', stage: '控制断面校核', caseId: 'case-basin-2026-03', status: 'risk' },
   ],

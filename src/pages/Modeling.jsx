@@ -1,8 +1,16 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { openPath, revealPath } from '../api/tauri_bridge';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
-import { daduheEvidenceWorkflowOrder, getDaduheWorkflowEvidence } from '../data/daduheWorkflowEvidence';
+import { resolveShellCaseId } from '../data/case_contract_shell';
+import {
+  formatFullSpatialHydroEvidenceCaseListText,
+  hasFullSpatialHydroEvidenceCase,
+} from '../data/caseShellPresets';
+import {
+  caseEvidenceWorkflowOrder,
+  getCaseWorkflowEvidence,
+} from '../data/daduheWorkflowEvidence';
 import ComponentLibrary from '../features/modeling/ComponentLibrary';
 import ModelCanvas from '../features/modeling/ModelCanvas';
 
@@ -12,14 +20,21 @@ import ModelCanvas from '../features/modeling/ModelCanvas';
  */
 export default function Modeling() {
   const { activeProject } = useStudioWorkspace();
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const showFullHydroEvidence = hasFullSpatialHydroEvidenceCase(shellCaseId);
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [placedComponents, setPlacedComponents] = useState([]);
   const [selectedPlaced, setSelectedPlaced] = useState(null);
-  const [selectedEvidenceWorkflow, setSelectedEvidenceWorkflow] = useState(daduheEvidenceWorkflowOrder[0]);
-  const workflowEvidence = useMemo(
-    () => getDaduheWorkflowEvidence(selectedEvidenceWorkflow),
-    [selectedEvidenceWorkflow]
-  );
+  const [selectedEvidenceWorkflow, setSelectedEvidenceWorkflow] = useState(caseEvidenceWorkflowOrder[0]);
+  const workflowEvidence = useMemo(() => {
+    if (!showFullHydroEvidence) return null;
+    return getCaseWorkflowEvidence(shellCaseId, selectedEvidenceWorkflow);
+  }, [showFullHydroEvidence, shellCaseId, selectedEvidenceWorkflow]);
+
+  useEffect(() => {
+    if (!showFullHydroEvidence) return;
+    setSelectedEvidenceWorkflow(caseEvidenceWorkflowOrder[0]);
+  }, [shellCaseId, showFullHydroEvidence]);
 
   const handleComponentSelect = (component) => {
     setSelectedComponent(component);
@@ -70,11 +85,13 @@ export default function Modeling() {
         </div>
       </div>
 
-      {activeProject.caseId === 'daduhe' && (
+      {showFullHydroEvidence && workflowEvidence ? (
         <section className="border-b border-slate-700/50 bg-slate-900/40 px-4 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="max-w-3xl">
-              <div className="text-xs uppercase tracking-[0.28em] text-hydro-300">daduhe evidence navigator</div>
+              <div className="text-xs uppercase tracking-[0.28em] text-hydro-300">
+                {shellCaseId} · 流域 / 水文主链 · workflow 证据导航
+              </div>
               <h2 className="mt-2 text-base font-semibold text-slate-100">把 workflow 结果回链到拓扑 / GIS / 审查证据</h2>
               <p className="mt-2 text-xs leading-6 text-slate-400">{workflowEvidence.headline}</p>
             </div>
@@ -95,8 +112,8 @@ export default function Modeling() {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            {daduheEvidenceWorkflowOrder.map((workflow) => {
-              const evidence = getDaduheWorkflowEvidence(workflow);
+            {caseEvidenceWorkflowOrder.map((workflow) => {
+              const evidence = getCaseWorkflowEvidence(shellCaseId, workflow);
               const selected = workflow === selectedEvidenceWorkflow;
               return (
                 <button
@@ -119,7 +136,7 @@ export default function Modeling() {
               <div className="text-xs uppercase tracking-[0.24em] text-slate-500">adjacent workflows</div>
               <div className="mt-2 grid gap-3 md:grid-cols-2">
                 {workflowEvidence.adjacentWorkflows.map((item) => {
-                  const adjacentEvidence = getDaduheWorkflowEvidence(item.workflow);
+                  const adjacentEvidence = getCaseWorkflowEvidence(shellCaseId, item.workflow);
                   return (
                     <div key={item.workflow} className="rounded-xl border border-slate-700/40 bg-slate-900/60 p-3">
                       <div className="flex items-start justify-between gap-3">
@@ -138,12 +155,14 @@ export default function Modeling() {
                       <div className="mt-2 break-all text-[11px] leading-5 text-slate-500">{item.contractPath}</div>
                       <div className="mt-3 flex items-center gap-2">
                         <button
+                          type="button"
                           onClick={() => openPath(item.contractPath)}
                           className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
                         >
                           打开合同
                         </button>
                         <button
+                          type="button"
                           onClick={() => revealPath(item.contractPath)}
                           className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
                         >
@@ -181,12 +200,14 @@ export default function Modeling() {
                       <div className="mt-2 break-all text-[11px] leading-5 text-slate-500">{item.path}</div>
                       <div className="mt-3 flex items-center gap-2">
                         <button
+                          type="button"
                           onClick={() => openPath(item.path)}
                           className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
                         >
                           打开资产
                         </button>
                         <button
+                          type="button"
                           onClick={() => revealPath(item.path)}
                           className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
                         >
@@ -198,6 +219,67 @@ export default function Modeling() {
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+      ) : (
+        <section className="border-b border-slate-700/50 bg-slate-900/40 px-4 py-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="max-w-3xl space-y-2">
+              <div className="text-xs uppercase tracking-[0.28em] text-amber-300/90">
+                {shellCaseId || '当前案例'} · 拓扑 / GIS（无全链水文证据树）
+              </div>
+              <h2 className="text-base font-semibold text-slate-100">当前 rollout 数据深度说明</h2>
+              <p className="text-xs leading-6 text-slate-400">
+                当前在闭环中声明为全链空间水文的案例为{' '}
+                <span className="font-mono text-slate-300">{formatFullSpatialHydroEvidenceCaseListText()}</span>
+                ——它们具备完整的
+                <span className="text-slate-200"> 流域划分、水文模拟 </span>
+                与探源—source_selection 全链 contracts 产物。其它 rollout 案例以 manifest、contracts 壳层与 E2E
+                编排为主；请勿在此期待与上述参考案例同构的断面/流域 JSON 树。补齐数据与产物后，在闭环 YAML 的{' '}
+                <span className="font-mono text-slate-500">hydrodesk_shell.full_spatial_hydro_evidence_case_ids</span>{' '}
+                中加入该 id，并运行{' '}
+                <span className="font-mono text-slate-500">export_playwright_rollout_registry.py</span>{' '}
+                更新生成 JSON 即可启用同款导航。
+              </p>
+            </div>
+            <div className="flex flex-shrink-0 flex-wrap gap-2">
+              <Link
+                to="/projects"
+                className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+              >
+                项目中心
+              </Link>
+              <Link
+                to="/simulation"
+                className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+              >
+                工作流执行
+              </Link>
+              <Link
+                to="/review"
+                className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300 transition-colors hover:bg-hydro-500/20"
+              >
+                审查交付
+              </Link>
+              {shellCaseId ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openPath(`cases/${shellCaseId}/contracts`)}
+                    className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+                  >
+                    打开 contracts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openPath(`cases/${shellCaseId}/manifest.yaml`)}
+                    className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
+                  >
+                    打开 manifest
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
         </section>
       )}

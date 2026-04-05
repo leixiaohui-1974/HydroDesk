@@ -1,5 +1,11 @@
-import { useMemo, useState } from 'react';
-import { openPath, revealPath } from '../api/tauri_bridge';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  openPath,
+  openPathWithAlternates,
+  probeHydrodeskAgentBackend,
+  revealPath,
+  revealPathWithAlternates,
+} from '../api/tauri_bridge';
 import hydromindClient from '../api/hydromind_client';
 import useTauri from '../hooks/useTauri';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
@@ -13,14 +19,20 @@ import {
   getNotebookStorageKey,
 } from '../data/notebookArtifacts';
 import {
-  getDaduheReviewAssets,
-  getDaduheRunReviewReleaseContracts,
-  getDaduheShellEntryPoints,
-  resolveDaduheShellCaseId,
-} from '../data/daduheShell';
+  getCaseReviewAssets,
+  getCaseRunReviewReleaseContracts,
+  getCaseShellEntryPoints,
+  resolveShellCaseId,
+} from '../data/case_contract_shell';
+import OmniBar from '../components/OmniBar';
+import NLReportRenderer from '../components/NLReportRenderer';
+import { getClaudecodeLineageDocRelPath } from '../config/claudecodeReference';
+import AgentStackReferencePanel from '../components/AgentStackReferencePanel';
+import AgentRuntimeStatusPanel from '../components/AgentRuntimeStatusPanel';
+import { useHydrodeskAgentStack } from '../hooks/useHydrodeskAgentStack';
 
 const quickPrompts = [
-  '解释当前 daduhe outcome gate 是否可以签发',
+  '解释当前案例 outcome gate 是否可以签发',
   '总结 strict_revalidation_ext 的下一步修复动作',
   '把当前 review 资产整理成 release 检查清单',
   '说明 Terminal / Agent / Notebook 三工作面的职责边界',
@@ -49,12 +61,14 @@ function normalizeAgentReply(payload) {
 }
 
 export default function AgentWorkspace() {
-  const { activeProject } = useStudioWorkspace();
+  const { activeProject, activeRole, activeMode, activeSurfaceMode } = useStudioWorkspace();
   const { isTauri, readFile, writeFile, showMessage } = useTauri();
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
-  const reviewAssets = useMemo(() => getDaduheReviewAssets(shellCaseId).slice(0, 4), [shellCaseId]);
-  const runReviewContracts = useMemo(() => getDaduheRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
-  const shellEntryPoints = useMemo(() => getDaduheShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
+  const { stack: agentStack, loadError: agentStackError, configSource: agentStackSource, reload: reloadAgentStack } =
+    useHydrodeskAgentStack();
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const reviewAssets = useMemo(() => getCaseReviewAssets(shellCaseId).slice(0, 4), [shellCaseId]);
+  const runReviewContracts = useMemo(() => getCaseRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
+  const shellEntryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
   const notebookPaths = useMemo(() => getNotebookArtifactPaths(shellCaseId), [shellCaseId]);
   const [sessionId, setSessionId] = useState(`hydrodesk-${shellCaseId}`);
   const [input, setInput] = useState(`请基于 ${shellCaseId} 当前 outcome gate 和 review 资产，给出下一步建议。`);
@@ -69,6 +83,22 @@ export default function AgentWorkspace() {
   const [sending, setSending] = useState(false);
   const [notebookSection, setNotebookSection] = useState('evidence');
   const [notebookWriteMode, setNotebookWriteMode] = useState('append');
+  const [agentBackendProbe, setAgentBackendProbe] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const p = await probeHydrodeskAgentBackend();
+        if (!cancelled) setAgentBackendProbe(p);
+      } catch {
+        if (!cancelled) setAgentBackendProbe(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function buildContextPrompt(question) {
     const contextBlock = [
@@ -172,7 +202,7 @@ export default function AgentWorkspace() {
     } catch (error) {
       setEngines([
         {
-          name: 'ClaudeCode Kernel',
+          name: 'HydroDesk 引擎列表（回退）',
           status: 'fallback',
           summary: error.message || String(error),
         },
@@ -210,13 +240,41 @@ export default function AgentWorkspace() {
     }
   }
 
+  // MCP Handle for Natural Language Reports
+  const handleMCPReportGenerated = (parsedReport) => {
+    setMessages((current) => [
+      ...current,
+      { role: 'assistant', content: "MCP 架构生成富文本解析任务完毕：", report: parsedReport.report }
+    ]);
+  };
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[0.9fr,1.4fr,0.9fr] gap-0">
       <section className="border-r border-slate-700/50 bg-slate-900/40 p-5">
         <div className="text-sm font-semibold text-slate-200">会话与模式说明</div>
         <div className="mt-3 rounded-2xl border border-slate-700/40 bg-slate-950/60 p-4 text-xs leading-6 text-slate-400">
-          HydroDesk 当前参考 cc-desktop 的工作面思路，把开发者工作面拆成 Terminal / Agent / Notebook。这里聚焦灵活 AI 调用和证据解释。
+          HydroDesk 将桌面工作面拆成 Terminal / Agent / Notebook；Agent 侧对齐本仓 <code className="text-slate-500">claudecode/</code>{' '}
+          的编排与工具分层思路，并绑定当前 case 作为「打开的工程」。
         </div>
+        <AgentRuntimeStatusPanel
+          caseId={shellCaseId}
+          activeRole={activeRole}
+          activeMode={activeMode}
+          activeSurfaceMode={activeSurfaceMode}
+          activeProjectName={activeProject?.name}
+          agentBackendProbe={agentBackendProbe}
+          agentStack={agentStack}
+          agentStackError={agentStackError}
+          agentStackSource={agentStackSource}
+          onReloadStack={reloadAgentStack}
+        />
+        <AgentStackReferencePanel
+          stack={agentStack}
+          loadError={agentStackError}
+          configSource={agentStackSource}
+          onReload={reloadAgentStack}
+          caseId={shellCaseId}
+        />
         <div className="mt-5">
           <div className="text-sm font-semibold text-slate-200">快捷提问</div>
           <div className="mt-3 space-y-2">
@@ -291,9 +349,19 @@ export default function AgentWorkspace() {
             <div className="mt-1 text-xs text-slate-500">
               当前项目 {activeProject.name} · case {activeProject.caseId} · session {sessionId}
             </div>
+            <div className="mt-1 text-[10px] text-slate-600">
+              编排谱系与 <code className="text-slate-500">claudecode/</code> 对照见{' '}
+              <button
+                type="button"
+                onClick={() => openPath(getClaudecodeLineageDocRelPath())}
+                className="text-amber-400/90 underline decoration-dotted decoration-amber-500/40 hover:text-amber-300"
+              >
+                {getClaudecodeLineageDocRelPath()}
+              </button>
+            </div>
           </div>
           <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">
-            ClaudeCode Kernel + Flexible AI Calls
+            HydroDesk Agent · 案例即项目 · NL→MCP 网关
           </div>
         </div>
 
@@ -311,7 +379,14 @@ export default function AgentWorkspace() {
                 <div className="mb-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
                   {message.role === 'assistant' ? 'Agent' : 'User'}
                 </div>
-                <pre className="whitespace-pre-wrap break-words font-sans">{message.content}</pre>
+                {message.report ? (
+                  <div className="mt-2 text-sm text-slate-300">
+                     <p className="mb-3 font-semibold text-emerald-400">{message.content}</p>
+                     <NLReportRenderer report={message.report} />
+                  </div>
+                ) : (
+                  <pre className="whitespace-pre-wrap break-words font-sans">{message.content}</pre>
+                )}
                 {message.role === 'assistant' && (
                   <div className="mt-3 flex items-center gap-2">
                     <button
@@ -333,23 +408,9 @@ export default function AgentWorkspace() {
           </div>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-900/50 p-4">
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="输入你的问题，或让 Agent 解释当前 outcome / release gate / review 资产"
-            className="h-28 w-full rounded-xl border border-slate-700/40 bg-slate-950 p-4 text-sm text-slate-300 outline-none placeholder:text-slate-500"
-          />
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <div className="text-xs text-slate-500">适合解释当前 case、生成行动项、把 review 线索转成 notebook 结论。</div>
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={sending}
-              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-4 py-2 text-xs text-hydro-300 disabled:opacity-50"
-            >
-              {sending ? '发送中...' : '发送给 Agent'}
-            </button>
-          </div>
+        <div className="mt-4">
+           {/* Direct OmniBar injection handling MCP NLP routing */}
+           <OmniBar onReportGenerated={handleMCPReportGenerated} />
         </div>
       </section>
 
@@ -369,13 +430,13 @@ export default function AgentWorkspace() {
                   引用到输入
                 </button>
                 <button
-                  onClick={() => openPath(contract.path)}
+                  onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
                   className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
                 >
                   打开
                 </button>
                 <button
-                  onClick={() => revealPath(contract.path)}
+                  onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
                   className="rounded-lg border border-slate-700/40 bg-slate-900/50 px-3 py-2 text-xs text-slate-300"
                 >
                   定位

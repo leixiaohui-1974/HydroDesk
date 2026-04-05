@@ -22,6 +22,17 @@ const fallbackSummary = (caseId) => ({
   duplicate_runs: [],
   pending_workflows: [],
   key_artifacts: [],
+  triad_workflow_run_rel: '',
+  triad_review_bundle_rel: '',
+  triad_release_manifest_rel: '',
+  triad_count: 0,
+  release_gate_eligible: false,
+  release_gate_blockers: [],
+  delivery_pack_pointer_rel: '',
+  delivery_latest_pack_rel: '',
+  delivery_pack_id: '',
+  delivery_pack_updated_at: '',
+  delivery_pack_eligible_at_last_pack: false,
 });
 
 export function useCaseContractSummary(caseId, pollMs = 5000) {

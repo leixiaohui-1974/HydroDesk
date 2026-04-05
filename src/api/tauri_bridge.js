@@ -97,6 +97,69 @@ export async function getCaseContractSummary(caseId, fallback = null) {
   return invokeCommand('get_case_contract_summary', { caseId }, fallback);
 }
 
+/** Agentic IDE：探测 claw 二进制与 agent_loop_gateway（方案 A Hybrid） */
+export async function probeHydrodeskAgentBackend(fallback = null) {
+  return invokeCommand(
+    'probe_hydrodesk_agent_backend',
+    {},
+    fallback ?? {
+      clawBinaryRel: null,
+      agentLoopGatewayRel: 'Hydrology/workflows/agent_loop_gateway.py',
+      schemeAReady: false,
+      integrationNoteZh:
+        '浏览器模式：无法探测本机 claw。请使用 Tauri 桌面壳，或在 claudecode/claw-code/rust 下 cargo build -p claw-cli。',
+    },
+  );
+}
+
+/**
+ * agent_loop_gateway.py --oneshot：传一行 JSON 请求，返回解析后的 stdout JSON（无 shell 拼接）。
+ * @param {Record<string, unknown>} request 如 { op: 'ping' }、{ op: 'list_tools', case_id: 'daduhe' }
+ */
+export async function agentLoopGatewayOneshot(request, fallback = null) {
+  return invokeCommand(
+    'agent_loop_gateway_oneshot',
+    { request },
+    fallback ?? {
+      success: false,
+      returnCode: -1,
+      response: {
+        ok: false,
+        error: 'browser_mode',
+        detail: '仅 Tauri 桌面端可调用 agent_loop_gateway（oneshot）。',
+      },
+      stderr: '',
+      rawStdout: '',
+    },
+  );
+}
+
+/** 启动常驻 agent_loop_gateway 子进程（stdio 多轮）；浏览器模式返回 inactive。 */
+export async function agentLoopGatewaySessionStart(fallback = null) {
+  return invokeCommand(
+    'agent_loop_gateway_session_start',
+    {},
+    fallback ?? { active: false, pid: null },
+  );
+}
+
+/** 向常驻网关写入一行 NDJSON（勿含换行）。 */
+export async function agentLoopGatewaySessionSend(line, fallback = undefined) {
+  return invokeCommand('agent_loop_gateway_session_send', { line }, fallback);
+}
+
+export async function agentLoopGatewaySessionStop(fallback = undefined) {
+  return invokeCommand('agent_loop_gateway_session_stop', {}, fallback);
+}
+
+export async function agentLoopGatewaySessionStatus(fallback = null) {
+  return invokeCommand(
+    'agent_loop_gateway_session_status',
+    {},
+    fallback ?? { active: false, pid: null },
+  );
+}
+
 export async function getCaseWorkflowCatalog(caseId, fallback = []) {
   return invokeCommand('get_case_workflow_catalog', { caseId }, fallback);
 }
@@ -134,7 +197,77 @@ export async function deletePath(targetPath, fallback = false) {
 }
 
 export async function runWorkspaceCommand(command, cwd, fallback = null) {
+  if (!isTauri()) {
+    console.warn("[HydroDesk] runWorkspaceCommand 仅在 Tauri 桌面环境中可用。请运行 `npm run tauri dev`。");
+    return fallback;
+  }
   return invokeCommand('run_workspace_command', { command, cwd }, fallback);
+}
+
+/** 读取仓库根相对文本文件（禁止路径含 `..`）；非 Tauri 返回 fallback。 */
+export async function readWorkspaceTextFile(relPath, fallback = null) {
+  return invokeCommand('read_workspace_text_file', { relPath }, fallback);
+}
+
+/** 写入仓库根相对文本文件（自动创建父目录）；非 Tauri 返回 fallback。 */
+export async function writeWorkspaceTextFile(relPath, content, fallback = null) {
+  return invokeCommand('write_workspace_text_file', { relPath, content }, fallback);
+}
+
+/** 仓库根相对路径是否存在（禁止 `..`）；非 Tauri 返回 fallback。 */
+export async function workspacePathExists(relPath, fallback = false) {
+  return invokeCommand('workspace_path_exists', { relPath }, fallback);
+}
+
+/** 按顺序返回第一个存在的仓库根相对路径，否则 null；非 Tauri 返回 fallback。 */
+export async function resolveFirstExistingWorkspacePath(relPaths, fallback = null) {
+  const list = Array.isArray(relPaths) ? relPaths.filter((p) => String(p ?? '').trim()) : [];
+  if (list.length === 0) return fallback;
+  return invokeCommand('resolve_first_existing_workspace_path', { relPaths: list }, fallback);
+}
+
+/** 按顺序读取第一个存在的文本文件；非 Tauri 返回 fallback。 */
+export async function readWorkspaceTextFileFirstOf(relPaths, fallback = null) {
+  const list = Array.isArray(relPaths) ? relPaths.filter((p) => String(p ?? '').trim()) : [];
+  if (list.length === 0) return fallback;
+  return invokeCommand('read_workspace_text_file_first_of', { relPaths: list }, fallback);
+}
+
+/** 打开第一个存在的候选路径（否则尝试第一个候选，可能报错）。 */
+export async function openPathWithAlternates(relPaths, fallback = false) {
+  const list = Array.isArray(relPaths) ? relPaths.filter((p) => String(p ?? '').trim()) : [];
+  if (list.length === 0) return fallback;
+  const resolved = await resolveFirstExistingWorkspacePath(list, null);
+  const target = resolved ?? list[0];
+  return openPath(target, fallback);
+}
+
+/** 在文件管理器中揭示第一个存在的候选路径。 */
+export async function revealPathWithAlternates(relPaths, fallback = false) {
+  const list = Array.isArray(relPaths) ? relPaths.filter((p) => String(p ?? '').trim()) : [];
+  if (list.length === 0) return fallback;
+  const resolved = await resolveFirstExistingWorkspacePath(list, null);
+  const target = resolved ?? list[0];
+  return revealPath(target, fallback);
+}
+
+/** Tauri 事件名：与 src-tauri/main.rs emit_all 一致 */
+export const TOPOLOGY_LIVE_EVENT = 'hydrodesk-topology-live';
+
+/**
+ * 订阅仿真/网关回传的拓扑增量（JSON），用于 ReactFlow setNodes 刷新。
+ * 浏览器模式下无事件源；可在控制台模拟：见 HydroDesk/docs/walkthrough.md
+ * @returns {Promise<() => void>} unlisten
+ */
+export async function subscribeTopologyLive(onPayload) {
+  if (!isTauri()) {
+    return () => {};
+  }
+  const { listen } = await import('@tauri-apps/api/event');
+  const unlisten = await listen(TOPOLOGY_LIVE_EVENT, (event) => {
+    onPayload(event.payload);
+  });
+  return unlisten;
 }
 
 /**

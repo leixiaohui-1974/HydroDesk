@@ -1,15 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
-import { openPath, revealPath } from '../api/tauri_bridge';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getDaduheReviewAssets,
-  getDaduheRunReviewReleaseContracts,
-  getDaduheShellEntryPoints,
-  resolveDaduheShellCaseId,
-} from '../data/daduheShell';
+  openPath,
+  openPathWithAlternates,
+  readWorkspaceTextFileFirstOf,
+  revealPath,
+  revealPathWithAlternates,
+  runWorkspaceCommand,
+} from '../api/tauri_bridge';
+import {
+  getCaseReviewAssets,
+  getCaseRunReviewReleaseContracts,
+  getCaseShellEntryPoints,
+  resolveShellCaseId,
+} from '../data/case_contract_shell';
 import { getActiveRoleAgent, getPendingApprovals, studioState } from '../data/studioState';
 import useTauri from '../hooks/useTauri';
+import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
+import {
+  buildBootstrapCaseTriadMinimalCommand,
+  buildHydrodeskE2eActionsCommand,
+  buildLintCaseKnowledgeLinksCommand,
+  parseSingleObjectJsonStdout,
+} from '../config/hydrodesk_commands';
 
 const badgeStyles = {
   passed: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
@@ -85,15 +99,114 @@ const roleTemplates = {
 
 export default function ReviewDelivery() {
   const { activeProject, activeRole, setActiveRole } = useStudioWorkspace();
-  const { isTauri, readFile } = useTauri();
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
+  const { isTauri } = useTauri();
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const { summary: caseContractSummary, loading: caseContractSummaryLoading, reload: reloadCaseContractSummary } =
+    useCaseContractSummary(activeProject.caseId, 8000);
+  const [triadBootstrapBusy, setTriadBootstrapBusy] = useState(false);
+  const [triadBootstrapError, setTriadBootstrapError] = useState('');
+  const [triadBootstrapStdout, setTriadBootstrapStdout] = useState('');
+  const [knowledgeLintBusy, setKnowledgeLintBusy] = useState(false);
+  const [knowledgeLintError, setKnowledgeLintError] = useState('');
+  const [knowledgeLintLast, setKnowledgeLintLast] = useState(null);
+  const [deliveryPackBusy, setDeliveryPackBusy] = useState(false);
+  const [deliveryPackError, setDeliveryPackError] = useState('');
+  const [deliveryPackLast, setDeliveryPackLast] = useState(null);
+
+  const bootstrapTriadMinimalCommand = useMemo(
+    () =>
+      shellCaseId
+        ? buildBootstrapCaseTriadMinimalCommand(['--apply', '--case-id', shellCaseId])
+        : '',
+    [shellCaseId],
+  );
+
+  const runTriadBootstrapMinimal = useCallback(async () => {
+    if (!bootstrapTriadMinimalCommand || !isTauri) return;
+    setTriadBootstrapBusy(true);
+    setTriadBootstrapError('');
+    setTriadBootstrapStdout('');
+    try {
+      const result = await runWorkspaceCommand(bootstrapTriadMinimalCommand, '.', null);
+      setTriadBootstrapStdout(String(result?.stdout || '').trim());
+      await reloadCaseContractSummary();
+    } catch (e) {
+      setTriadBootstrapError(e?.message || String(e));
+    } finally {
+      setTriadBootstrapBusy(false);
+    }
+  }, [bootstrapTriadMinimalCommand, isTauri, reloadCaseContractSummary]);
+
+  const runKnowledgeLintCurrent = useCallback(async () => {
+    if (!shellCaseId || !isTauri) return;
+    setKnowledgeLintBusy(true);
+    setKnowledgeLintError('');
+    try {
+      const cmd = buildLintCaseKnowledgeLinksCommand(['--case-id', shellCaseId]);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.case_id) {
+        setKnowledgeLintError('未能解析知识链接 lint JSON');
+        setKnowledgeLintLast(null);
+        return;
+      }
+      setKnowledgeLintLast({
+        ok: !!payload.ok,
+        broken_relative_link_count: payload.broken_relative_link_count ?? 0,
+        raw_dir_exists: !!payload.raw_dir_exists,
+        errors: Array.isArray(payload.errors) ? payload.errors : [],
+      });
+    } catch (e) {
+      setKnowledgeLintError(e?.message || String(e));
+      setKnowledgeLintLast(null);
+    } finally {
+      setKnowledgeLintBusy(false);
+    }
+  }, [shellCaseId, isTauri]);
+
+  const runDeliveryDocsPack = useCallback(
+    async (strict) => {
+      if (!shellCaseId || !isTauri) return;
+      setDeliveryPackBusy(true);
+      setDeliveryPackError('');
+      setDeliveryPackLast(null);
+      try {
+        const argv = ['--action', 'generate-delivery-docs-pack'];
+        if (strict) argv.push('--require-release-gate');
+        const cmd = buildHydrodeskE2eActionsCommand(shellCaseId, argv);
+        const result = await runWorkspaceCommand(cmd, '.', null);
+        const payload = parseSingleObjectJsonStdout(result?.stdout);
+        if (!payload || typeof payload !== 'object') {
+          setDeliveryPackError('未能解析交付包 JSON');
+          return;
+        }
+        setDeliveryPackLast(payload);
+        if (!payload.ok) {
+          setDeliveryPackError(
+            payload.error === 'blocked_by_release_gate_or_knowledge_lint'
+              ? '严格模式：签发 Gate 或知识链接 Lint 未通过，未写入磁盘'
+              : String(payload.error || '生成失败'),
+          );
+          return;
+        }
+        await reloadCaseContractSummary();
+      } catch (e) {
+        setDeliveryPackError(e?.message || String(e));
+        setDeliveryPackLast(null);
+      } finally {
+        setDeliveryPackBusy(false);
+      }
+    },
+    [shellCaseId, isTauri, reloadCaseContractSummary],
+  );
+
   const pendingApprovals = getPendingApprovals();
   const { artifacts, checkpoints, executionHistory, loading } = useWorkflowExecution(activeProject.caseId, studioState.reports);
   const roleTemplate = roleTemplates[activeRole] || roleTemplates.designer;
   const primaryAgent = getActiveRoleAgent('/review', activeRole);
   const latestRun = executionHistory[0];
-  const contractChain = getDaduheRunReviewReleaseContracts(shellCaseId);
-  const liveMonitorAssets = getDaduheReviewAssets(shellCaseId);
+  const contractChain = getCaseRunReviewReleaseContracts(shellCaseId);
+  const liveMonitorAssets = getCaseReviewAssets(shellCaseId);
   const memoAssets = useMemo(
     () => liveMonitorAssets.filter((asset) => asset.category === 'memo'),
     [liveMonitorAssets]
@@ -115,7 +228,8 @@ export default function ReviewDelivery() {
     ].filter(Boolean),
     [contractChain, memoAssets, shellCaseId]
   );
-  const shellEntryPoints = getDaduheShellEntryPoints(shellCaseId);
+  const shellEntryPoints = getCaseShellEntryPoints(shellCaseId);
+  const [notebookMetaMap, setNotebookMetaMap] = useState({});
   const signoffOverview = useMemo(() => {
     const notebookMeta =
       notebookMetaMap[`cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.json`] ||
@@ -142,7 +256,6 @@ export default function ReviewDelivery() {
   );
   const [selectedSpotlight, setSelectedSpotlight] = useState(defaultSpotlight);
   const [memoPreviewMap, setMemoPreviewMap] = useState({});
-  const [notebookMetaMap, setNotebookMetaMap] = useState({});
 
   useEffect(() => {
     setSelectedSpotlight(defaultSpotlight);
@@ -162,9 +275,13 @@ export default function ReviewDelivery() {
 
       const entries = await Promise.all(
         notebookAssetChain.map(async (asset) => {
+          const tryPaths = asset.pathAlternates?.length ? asset.pathAlternates : [asset.path];
           try {
-            const content = await readFile(asset.path);
-            if (asset.path.endsWith('.json')) {
+            const content = await readWorkspaceTextFileFirstOf(tryPaths, null);
+            if (content == null) {
+              return [asset.path, { preview: '当前 notebook chain 资产尚未生成或暂不可读取。', metadata: null }];
+            }
+            try {
               const parsed = JSON.parse(content);
               return [
                 asset.path,
@@ -173,8 +290,9 @@ export default function ReviewDelivery() {
                   metadata: parsed.metadata || null,
                 },
               ];
+            } catch {
+              return [asset.path, { preview: content.split('\n').slice(0, 8).join('\n'), metadata: null }];
             }
-            return [asset.path, { preview: content.split('\n').slice(0, 8).join('\n'), metadata: null }];
           } catch (error) {
             return [asset.path, { preview: '当前 notebook chain 资产尚未生成或暂不可读取。', metadata: null }];
           }
@@ -198,7 +316,7 @@ export default function ReviewDelivery() {
     return () => {
       cancelled = true;
     };
-  }, [isTauri, notebookAssetChain, readFile]);
+  }, [isTauri, notebookAssetChain]);
 
   return (
     <div className="p-6 space-y-6">
@@ -326,6 +444,104 @@ export default function ReviewDelivery() {
             </div>
           </div>
 
+          <div className="mt-4 rounded-2xl border border-slate-700/50 bg-slate-950/50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">统一签发 Gate（P2）</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Triad 齐备 + verification 无 pending + closure 通过 + coverage 非 blocked。由 Tauri
+                  get_case_contract_summary 汇总。
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={triadBootstrapBusy || !bootstrapTriadMinimalCommand || !isTauri}
+                  onClick={() => void runTriadBootstrapMinimal()}
+                  className="rounded-lg border border-slate-600/60 bg-slate-800/70 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
+                  title="双缺时写入最小 workflow_run / review_bundle / release_manifest（_auto_generated）；不替代正式 build-release-pack"
+                >
+                  {triadBootstrapBusy ? '写入中…' : '补最小 triad 占位'}
+                </button>
+                <button
+                  type="button"
+                  disabled={knowledgeLintBusy || !shellCaseId || !isTauri}
+                  onClick={() => void runKnowledgeLintCurrent()}
+                  className="rounded-lg border border-indigo-600/50 bg-indigo-950/40 px-2 py-1 text-[10px] text-indigo-200/90 disabled:opacity-50"
+                  title="README/contracts 内相对链接 + 必填路径；配置见 hydrodesk_shell.knowledge_lint"
+                >
+                  {knowledgeLintBusy ? 'Lint…' : '知识链接 Lint'}
+                </button>
+                <span
+                  className={`rounded-full border px-3 py-1 text-[11px] ${
+                    caseContractSummary.release_gate_eligible
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                      : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                  }`}
+                >
+                  {caseContractSummaryLoading
+                    ? '加载中…'
+                    : caseContractSummary.release_gate_eligible
+                      ? '可签发'
+                      : '不可签发'}
+                </span>
+              </div>
+            </div>
+            {triadBootstrapError ? (
+              <p className="mt-2 text-[11px] text-rose-300/90">{triadBootstrapError}</p>
+            ) : null}
+            {triadBootstrapStdout ? (
+              <pre className="mt-2 max-h-24 overflow-auto rounded border border-slate-800/80 bg-slate-950/80 p-2 font-mono text-[10px] text-slate-500">
+                {triadBootstrapStdout}
+              </pre>
+            ) : null}
+            {knowledgeLintError ? (
+              <p className="mt-2 text-[11px] text-rose-300/90">{knowledgeLintError}</p>
+            ) : null}
+            {knowledgeLintLast ? (
+              <p className="mt-2 text-[11px] text-slate-500">
+                知识壳 lint（当前案例）：{knowledgeLintLast.ok ? '通过' : '未通过'} · 相对断链{' '}
+                {knowledgeLintLast.broken_relative_link_count} · raw 目录
+                {knowledgeLintLast.raw_dir_exists ? '有' : '无'}
+                {knowledgeLintLast.errors?.length > 0
+                  ? ` · ${knowledgeLintLast.errors.join(' · ')}`
+                  : ''}
+              </p>
+            ) : null}
+            <div className="mt-3 grid gap-2 text-[11px] text-slate-500 md:grid-cols-3">
+              <div>
+                <span className="text-slate-600">Triad</span>{' '}
+                <span className="font-mono text-slate-300">
+                  {caseContractSummary.triad_count ?? 0}/3
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-600">coverage gate</span>{' '}
+                <span className="font-mono text-slate-300">{caseContractSummary.gate_status || 'unknown'}</span>
+              </div>
+              <div>
+                <span className="text-slate-600">closure</span>{' '}
+                <span className="font-mono text-slate-300">
+                  {caseContractSummary.closure_check_passed ? 'ok' : 'fail/缺报告'}
+                </span>
+              </div>
+            </div>
+            <div className="mt-2 space-y-1 font-mono text-[10px] leading-5 text-slate-600 break-all">
+              <div>workflow_run: {caseContractSummary.triad_workflow_run_rel || '—'}</div>
+              <div>review_bundle: {caseContractSummary.triad_review_bundle_rel || '—'}</div>
+              <div>release_manifest: {caseContractSummary.triad_release_manifest_rel || '—'}</div>
+            </div>
+            {(caseContractSummary.release_gate_blockers || []).length > 0 ? (
+              <ul className="mt-3 list-inside list-disc space-y-1 text-xs text-amber-200/90">
+                {caseContractSummary.release_gate_blockers.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : !caseContractSummaryLoading ? (
+              <p className="mt-3 text-xs text-emerald-200/80">当前规则下阻断项为空（仍建议人工复核 Notebook / Memo）。</p>
+            ) : null}
+          </div>
+
           <div className="mt-5 space-y-3">
             {studioState.reviewChecks.map((check) => (
               <div key={check.name} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
@@ -346,6 +562,139 @@ export default function ReviewDelivery() {
         <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
           <h2 className="text-sm font-semibold text-slate-200">交付物与导出</h2>
           <div className="mt-1 text-xs text-slate-500">{loading ? '读取真实 artifacts 中...' : '优先展示真实案例产物'}</div>
+          <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">交付文档包（delivery_pack）</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  写入 <span className="font-mono text-slate-400">cases/{shellCaseId}/contracts/delivery_pack/&lt;UTC&gt;/</span>
+                  ：manifest、SUMMARY、<span className="font-mono text-slate-400">snapshots/triad/</span>（三件套）与{' '}
+                  <span className="font-mono text-slate-400">snapshots/contracts/&lt;相对路径&gt;</span>
+                  （YAML 列出的 contracts 内文件）；并更新{' '}
+                  <span className="font-mono text-slate-400">delivery_pack.latest.json</span>。
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={deliveryPackBusy || !shellCaseId || !isTauri}
+                  onClick={() => void runDeliveryDocsPack(false)}
+                  className="rounded-lg border border-emerald-600/50 bg-emerald-950/40 px-2 py-1 text-[10px] text-emerald-200/90 disabled:opacity-50"
+                  title="默认即使 Gate/Lint 未过也落盘；manifest 记录 eligible_at_pack_time"
+                >
+                  {deliveryPackBusy ? '生成中…' : '生成交付包'}
+                </button>
+                <button
+                  type="button"
+                  disabled={deliveryPackBusy || !shellCaseId || !isTauri}
+                  onClick={() => void runDeliveryDocsPack(true)}
+                  className="rounded-lg border border-slate-600/60 bg-slate-800/70 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
+                  title="须签发 Gate 与 knowledge_lint 均通过才写入"
+                >
+                  {deliveryPackBusy ? '生成中…' : '严格（须 Gate+Lint）'}
+                </button>
+                {deliveryPackLast?.pack_dir ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!isTauri}
+                      onClick={() => openPath(deliveryPackLast.pack_dir)}
+                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
+                    >
+                      打开目录
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isTauri}
+                      onClick={() => revealPath(deliveryPackLast.pack_dir)}
+                      className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
+                    >
+                      定位
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+            {deliveryPackError ? (
+              <p className="mt-2 text-[11px] text-rose-300/90">{deliveryPackError}</p>
+            ) : null}
+            {deliveryPackError &&
+            Array.isArray(deliveryPackLast?.combined_blockers) &&
+            deliveryPackLast.combined_blockers.length > 0 ? (
+              <ul className="mt-2 list-inside list-disc space-y-1 text-[11px] text-amber-200/90">
+                {deliveryPackLast.combined_blockers.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : null}
+            {deliveryPackLast ? (
+              <p className="mt-2 text-[11px] text-slate-500">
+                ok: {deliveryPackLast.ok ? '是' : '否'} · eligible_at_pack_time:{' '}
+                {deliveryPackLast.eligible_at_pack_time ? '是' : '否'}
+                {deliveryPackLast.pack_dir ? (
+                  <>
+                    {' '}
+                    · <span className="font-mono text-slate-400">{deliveryPackLast.pack_dir}</span>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
+            {caseContractSummary.delivery_pack_pointer_rel ? (
+              <div className="mt-3 rounded-lg border border-slate-700/40 bg-slate-950/50 p-3 text-[11px] text-slate-500">
+                <div className="font-medium text-slate-400">壳层摘要 · 最新交付包指针</div>
+                <div className="mt-1">
+                  pack_id{' '}
+                  <span className="font-mono text-slate-300">{caseContractSummary.delivery_pack_id || '—'}</span>
+                  {' · '}
+                  eligible_at_pack_time: {caseContractSummary.delivery_pack_eligible_at_last_pack ? '是' : '否'}
+                  {caseContractSummary.delivery_pack_updated_at ? (
+                    <>
+                      {' '}
+                      · updated{' '}
+                      <span className="font-mono text-slate-400">{caseContractSummary.delivery_pack_updated_at}</span>
+                    </>
+                  ) : null}
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-slate-600 break-all">
+                  {caseContractSummary.delivery_latest_pack_rel || caseContractSummary.delivery_pack_pointer_rel}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {caseContractSummary.delivery_latest_pack_rel ? (
+                    <button
+                      type="button"
+                      disabled={!isTauri}
+                      onClick={() => openPath(caseContractSummary.delivery_latest_pack_rel)}
+                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
+                    >
+                      打开最新包目录
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={!isTauri}
+                    onClick={() => openPath(caseContractSummary.delivery_pack_pointer_rel)}
+                    className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
+                  >
+                    打开指针 JSON
+                  </button>
+                  {caseContractSummary.delivery_latest_pack_rel ? (
+                    <button
+                      type="button"
+                      disabled={!isTauri}
+                      onClick={() => revealPath(caseContractSummary.delivery_latest_pack_rel)}
+                      className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
+                    >
+                      定位最新包
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : !caseContractSummaryLoading ? (
+              <p className="mt-2 text-[11px] text-slate-600">
+                尚无 <span className="font-mono">delivery_pack.latest.json</span>；生成一次交付包后将出现在此并由摘要轮询刷新。
+              </p>
+            ) : null}
+          </div>
           <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -374,13 +723,13 @@ export default function ReviewDelivery() {
                   <div className="mt-3 text-[10px] leading-5 text-slate-500">{contract.path}</div>
                   <div className="mt-3 flex items-center gap-2">
                     <button
-                      onClick={() => openPath(contract.path)}
+                      onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
                       className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
                     >
                       打开
                     </button>
                     <button
-                      onClick={() => revealPath(contract.path)}
+                      onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
                       className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
                     >
                       定位
@@ -395,7 +744,7 @@ export default function ReviewDelivery() {
               <div>
                 <div className="text-sm font-semibold text-slate-100">Live 监控与验收入口</div>
                 <div className="mt-1 text-xs text-slate-500">
-                  在产品壳里直接打开 daduhe 的 live dashboard、coverage 和 verification 资产。
+                  在产品壳里直接打开当前案例（{shellCaseId}）的 live dashboard、coverage 和 verification 资产。
                 </div>
               </div>
               <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-[10px] text-hydro-300">
@@ -404,7 +753,12 @@ export default function ReviewDelivery() {
             </div>
             <div className="mt-4 space-y-3">
               {liveMonitorAssets.map((asset) => (
-                <div key={asset.path} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
+                <div
+                  key={asset.path}
+                  data-testid="review-live-asset"
+                  data-contract-path={asset.path}
+                  className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4"
+                >
                   <div className="text-sm text-slate-200">{asset.name}</div>
                   <div className="mt-1 text-xs leading-5 text-slate-500">{asset.note}</div>
                   <div className="mt-3 text-xs text-slate-500">{asset.path}</div>
@@ -488,7 +842,7 @@ export default function ReviewDelivery() {
               <div>
                 <div className="text-sm font-semibold text-slate-100">路线图 / backlog 入口</div>
                 <div className="mt-1 text-xs text-slate-500">
-                  把 daduhe 壳层的 North Star、HydroDesk backlog 和 backlog 命令入口放到同一面板。
+                  把当前案例壳层（North Star）、HydroDesk backlog 与命令入口收敛到同一面板。
                 </div>
               </div>
               <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-300">

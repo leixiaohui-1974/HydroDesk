@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { openPath, revealPath } from '../api/tauri_bridge';
+import { openPath, openPathWithAlternates, revealPath, revealPathWithAlternates } from '../api/tauri_bridge';
 import useTauri from '../hooks/useTauri';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 import {
@@ -10,11 +10,11 @@ import {
   buildReviewMemoMarkdown as buildSharedReviewMemoMarkdown,
 } from '../data/notebookArtifacts';
 import {
-  getDaduheReviewAssets,
-  getDaduheRunReviewReleaseContracts,
-  getDaduheShellEntryPoints,
-  resolveDaduheShellCaseId,
-} from '../data/daduheShell';
+  getCaseReviewAssets,
+  getCaseRunReviewReleaseContracts,
+  getCaseShellEntryPoints,
+  resolveShellCaseId,
+} from '../data/case_contract_shell';
 
 const notebookSections = [
   { key: 'baseline', title: '基线与上下文' },
@@ -33,15 +33,15 @@ function buildDefaultNotes(caseId, projectName) {
 export default function NotebookWorkspace() {
   const { activeProject } = useStudioWorkspace();
   const { isTauri, readFile, writeFile, showMessage } = useTauri();
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
   const storageKey = `hydrodesk-notebook-${shellCaseId}`;
   const notebookJsonPath = `cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.json`;
   const notebookMarkdownPath = `cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.md`;
   const reviewMemoPath = `cases/${shellCaseId}/contracts/hydrodesk_review_memo.latest.md`;
   const releaseNotePath = `cases/${shellCaseId}/contracts/hydrodesk_release_note.latest.md`;
-  const reviewAssets = useMemo(() => getDaduheReviewAssets(shellCaseId), [shellCaseId]);
-  const contracts = useMemo(() => getDaduheRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
-  const entryPoints = useMemo(() => getDaduheShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
+  const reviewAssets = useMemo(() => getCaseReviewAssets(shellCaseId), [shellCaseId]);
+  const contracts = useMemo(() => getCaseRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
+  const entryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
   const releaseEvidenceAssets = useMemo(
     () => [
       ...reviewAssets.filter((asset) => asset.category === 'gate' || asset.name === 'HydroDesk Release Note'),
@@ -351,13 +351,13 @@ export default function NotebookWorkspace() {
               <div className="mt-3 text-[11px] text-slate-500">{contract.path}</div>
               <div className="mt-3 flex items-center gap-2">
                 <button
-                  onClick={() => openPath(contract.path)}
+                  onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
                   className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
                 >
                   打开
                 </button>
                 <button
-                  onClick={() => revealPath(contract.path)}
+                  onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
                   className="rounded-lg border border-slate-700/40 bg-slate-900/50 px-3 py-2 text-xs text-slate-300"
                 >
                   定位

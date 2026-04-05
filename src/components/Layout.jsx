@@ -7,7 +7,7 @@ import ContextPanel from './ContextPanel';
 import ActivityDock from './ActivityDock';
 import { developerSurfaces, getStudioView, getSurfaceByPath, getVisibleStudioViews } from '../config/studioViews';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
-import { getDaduheWorkbenchRail, resolveDaduheShellCaseId } from '../data/daduheShell';
+import { getCaseWorkbenchRail, resolveShellCaseId } from '../data/case_contract_shell';
 
 const railStyles = {
   active: 'border-hydro-500/40 bg-hydro-500/15 text-hydro-200',
@@ -28,8 +28,8 @@ export default function Layout({ children, isTauri }) {
   const activeView = getStudioView(location.pathname);
   const visibleViews = useMemo(() => getVisibleStudioViews(activeMode), [activeMode]);
   const isViewVisible = visibleViews.some((view) => view.path === activeView.path);
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
-  const workbenchRail = useMemo(() => getDaduheWorkbenchRail(shellCaseId, location.pathname), [location.pathname, shellCaseId]);
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const workbenchRail = useMemo(() => getCaseWorkbenchRail(shellCaseId, location.pathname), [location.pathname, shellCaseId]);
   const activeStage = workbenchRail.find((stage) => stage.isActive) || null;
   const activeSurface = useMemo(
     () => developerSurfaces.find((surface) => surface.key === activeSurfaceMode) || developerSurfaces[0],
@@ -104,7 +104,7 @@ export default function Layout({ children, isTauri }) {
                       <div className="mt-3 text-xs text-slate-500">
                         {activeStage
                           ? `${activeStage.title} 工位 · ${activeStage.summary}`
-                          : '总览工位 · 从 Launch / Monitor / Review / Release 进入大渡河自主运行验收主链'}
+                          : '总览工位 · 从 Launch / Monitor / Review / Release 进入当前案例自主运行验收主链'}
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button

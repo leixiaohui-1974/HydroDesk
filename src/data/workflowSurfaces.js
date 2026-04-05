@@ -2,7 +2,7 @@ export const executionSurfaceCatalog = {
   product: {
     label: 'Product Workflow',
     summary: '确定性、可回放、可产出合同资产的领域工作流，应该作为 HydroDesk 的主执行面。',
-    whenToUse: '运行 daduhe 建模、率定、仿真、验证、验收与报告链路时优先使用。',
+    whenToUse: '运行当前案例建模、率定、仿真、验证、验收与报告等产品工作流时优先使用。',
   },
   agent: {
     label: 'Agent',
@@ -12,7 +12,7 @@ export const executionSurfaceCatalog = {
   skill: {
     label: 'Skill',
     summary: '固定编排模板，适合把重复的多步动作打包成可复用入口。',
-    whenToUse: '当 daduhe 的常见操作要一键执行，例如“刷新验收包 + 回填证据 + 更新看板”。',
+    whenToUse: '当当前案例的常见操作要一键执行，例如“刷新验收包 + 回填证据 + 更新看板”。',
   },
   mcp: {
     label: 'MCP',

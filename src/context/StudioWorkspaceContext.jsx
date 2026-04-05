@@ -10,8 +10,21 @@ export function StudioWorkspaceProvider({ children }) {
   const [activeSurfaceMode, setActiveSurfaceMode] = useState(studioState.activeSurfaceMode);
 
   const value = useMemo(() => {
+    const fromStudio = studioState.projects.find((project) => project.id === activeProjectId);
     const activeProject =
-      studioState.projects.find((project) => project.id === activeProjectId) || studioState.projects[0];
+      fromStudio ||
+      (activeProjectId &&
+      typeof activeProjectId === 'string' &&
+      !/^proj-/i.test(activeProjectId)
+        ? {
+            id: activeProjectId,
+            name: activeProjectId,
+            stage: 'workspace',
+            caseId: activeProjectId,
+            status: 'active',
+          }
+        : null) ||
+      studioState.projects[0];
 
     return {
       activeProjectId,

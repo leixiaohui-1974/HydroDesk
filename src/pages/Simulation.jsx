@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { openPath, revealPath } from '../api/tauri_bridge';
-import { getDaduheReviewAssets, getDaduheShellEntryPoints, resolveDaduheShellCaseId } from '../data/daduheShell';
+import { getCaseReviewAssets, getCaseShellEntryPoints, resolveShellCaseId } from '../data/case_contract_shell';
+import {
+  AUTONOMY_PINNED_WORKFLOW_CARDS,
+  caseAutonomyChainSectionTitle,
+  caseGatePanelLabel,
+  formatFullSpatialHydroEvidenceCaseListText,
+  hasFullSpatialHydroEvidenceCase,
+} from '../data/caseShellPresets';
 import { studioState } from '../data/studioState';
 import { getWorkflowSurface } from '../data/workflowSurfaces';
 import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
@@ -68,25 +75,12 @@ const SimulationRow = ({ sim, onOpenLog, onRevealLog, onStop }) => {
   );
 };
 
-const pinnedDaduheWorkflowCards = [
-  {
-    workflow: 'autonomy_autorun',
-    label: 'Run 主链',
-    summary: '直接触发 daduhe 自主运行闭环，把 live dashboard、日志和 gate 资产绑定到同一条执行链。',
-  },
-  {
-    workflow: 'autonomy_assess',
-    label: 'Review Gate',
-    summary: '主链执行后立刻补自治评估与验收 gate，避免 review 入口散落在不同目录。',
-  },
-];
-
 const inspectionAssetNames = new Set(['Live Dashboard HTML', 'Live Dashboard Markdown', 'Verification Report']);
 const reviewAssetNames = new Set(['Outcome Coverage Report', 'Autonomy Roadmap', 'HydroDesk Fusion Backlog']);
 
 export default function Simulation() {
   const { activeProject } = useStudioWorkspace();
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
   const [selectedEngine, setSelectedEngine] = useState('local');
   const { workflows, runtimeSnapshot, loading, reload: reloadRuntime } = useStudioRuntime();
   const { summary: caseSummary } = useCaseContractSummary(activeProject.caseId);
@@ -107,15 +101,15 @@ export default function Simulation() {
     studioState.artifacts
   );
   const [selectedWorkflow, setSelectedWorkflow] = useState('');
-  const shellAssets = useMemo(() => getDaduheReviewAssets(shellCaseId), [shellCaseId]);
-  const shellEntryPoints = useMemo(() => getDaduheShellEntryPoints(shellCaseId), [shellCaseId]);
+  const shellAssets = useMemo(() => getCaseReviewAssets(shellCaseId), [shellCaseId]);
+  const shellEntryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId), [shellCaseId]);
   const workflowOptions = useMemo(
     () => workflows.map((workflow) => ({ value: workflow.name, label: `${workflow.name} · ${workflow.description}` })),
     [workflows]
   );
   const preferredWorkflow = useMemo(() => {
     const preferred = workflowOptions.find(({ value }) =>
-      pinnedDaduheWorkflowCards.some((card) => card.workflow === value)
+      AUTONOMY_PINNED_WORKFLOW_CARDS.some((card) => card.workflow === value)
     );
     return preferred?.value || workflowOptions[0]?.value || '';
   }, [workflowOptions]);
@@ -126,7 +120,7 @@ export default function Simulation() {
   );
   const pinnedWorkflows = useMemo(
     () =>
-      pinnedDaduheWorkflowCards
+      AUTONOMY_PINNED_WORKFLOW_CARDS
         .map((card) => {
           const manifest = workflowCatalog.find((workflow) => workflow.name === card.workflow) || null;
           return {
@@ -153,7 +147,7 @@ export default function Simulation() {
   );
   const activeAutonomyRun = useMemo(() => {
     const recentRuns = [launchResult, ...executionHistory].filter(Boolean);
-    return recentRuns.find((run) => pinnedDaduheWorkflowCards.some((card) => card.workflow === run.workflow)) || null;
+    return recentRuns.find((run) => AUTONOMY_PINNED_WORKFLOW_CARDS.some((card) => card.workflow === run.workflow)) || null;
   }, [executionHistory, launchResult]);
 
   useEffect(() => {
@@ -185,7 +179,9 @@ export default function Simulation() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Launch · 主链启动台</h1>
-          <p className="text-sm text-slate-400 mt-1">统一选择 daduhe pinned workflow、运行后端和执行策略，把 WorkflowRun 固定为主链入口</p>
+          <p className="text-sm text-slate-400 mt-1">
+            统一选择当前案例（{shellCaseId || '未选案例'}）pinned 主链 workflow、运行后端与执行策略，把 WorkflowRun 固定为主链入口
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -263,7 +259,7 @@ export default function Simulation() {
           <div className="mt-1 text-xs text-slate-500">{runtimeSnapshot.backend || '无后端信息'}</div>
         </div>
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-xs text-slate-500">daduhe Gate</div>
+          <div className="text-xs text-slate-500">{caseGatePanelLabel(shellCaseId)}</div>
           <div className="mt-2 text-base font-semibold text-slate-100">
             {caseSummary.gate_status === 'passed' ? 'passed' : caseSummary.gate_status || 'unknown'}
           </div>
@@ -273,10 +269,23 @@ export default function Simulation() {
         </div>
       </div>
 
+      {!hasFullSpatialHydroEvidenceCase(shellCaseId) ? (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-xs leading-6 text-amber-100/90">
+          <span className="font-semibold text-amber-200">数据深度提示：</span>
+          案例 <span className="font-mono text-amber-100">{shellCaseId || '—'}</span> 在 rollout 中
+          <strong className="text-amber-50">
+            {' '}
+            未配备与全链空间水文参考案例（<span className="font-mono text-amber-100/95">{formatFullSpatialHydroEvidenceCaseListText()}</span>
+            ）同级的流域划分 + 水文模拟{' '}
+          </strong>
+          全链产物；主链仍以 E2E 壳层、contracts 与 manifest 为主。建模页的探源—断面—水文证据树亦仅对上述配置案例开放。
+        </div>
+      ) : null}
+
       <section className="rounded-2xl border border-hydro-500/20 bg-hydro-500/5 p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-slate-100">daduhe 自主运行链路</h2>
+            <h2 className="text-sm font-semibold text-slate-100">{caseAutonomyChainSectionTitle(shellCaseId)}</h2>
             <p className="mt-1 text-xs text-slate-400">
               把启动、巡检、审查三步收敛到工作流执行页，避免在项目中心 / 监控 / 审查页之间来回找入口。
             </p>
@@ -319,6 +328,7 @@ export default function Simulation() {
                 pinnedWorkflows.map((card) => (
                   <div
                     key={card.workflow}
+                    data-testid={`pinned-workflow-${card.workflow}`}
                     className={`rounded-xl border p-4 ${
                       selectedWorkflow === card.workflow
                         ? 'border-hydro-500/40 bg-hydro-500/10'
@@ -357,7 +367,7 @@ export default function Simulation() {
                 ))
               ) : (
                 <div className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4 text-xs leading-5 text-slate-500">
-                  当前 workflow 注册表里还没有 daduhe pinned 主链，先通过下方通用 selector 启动。
+                  当前 workflow 注册表里还没有本案例 pinned 主链（autonomy_autorun / autonomy_assess），请通过下方通用 selector 启动其它工作流。
                 </div>
               )}
             </div>
@@ -496,6 +506,7 @@ export default function Simulation() {
         <div className="bg-slate-800/40 rounded-xl border border-slate-700/50 p-4">
           <h3 className="text-sm font-semibold text-slate-300 mb-3">工作流类型</h3>
           <select
+            data-testid="workflow-registry-select"
             value={selectedWorkflow}
             onChange={(event) => setSelectedWorkflow(event.target.value)}
             className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-hydro-500 focus:outline-none"

@@ -1,4 +1,8 @@
-const WORKFLOW_EVIDENCE = {
+/**
+ * 以 daduhe 为模板路径；可通过 remapWorkflowEvidenceForCase 映射到其它案例。
+ * 建模页仅在 caseShellPresets.hasFullSpatialHydroEvidenceCase(caseId) 为真时展示全量证据树，避免无流域/水文主链的案例出现空壳误导。
+ */
+const WORKFLOW_EVIDENCE_TEMPLATE = {
   source_to_delineation: {
     label: 'source_to_delineation',
     headline: '把候选数据源、控制站映射和流域出口闭合到同一条空间证据链。',
@@ -302,8 +306,52 @@ const WORKFLOW_EVIDENCE = {
   },
 };
 
-export const daduheEvidenceWorkflowOrder = ['source_to_delineation', 'section_analysis', 'model'];
+const TEMPLATE_CASE_ID = 'daduhe';
 
+function remapWorkflowEvidenceForCase(caseId, workflowName) {
+  const cid = caseId != null ? String(caseId).trim() : '';
+  const key = workflowName || 'source_to_delineation';
+  const base = WORKFLOW_EVIDENCE_TEMPLATE[key] || WORKFLOW_EVIDENCE_TEMPLATE.source_to_delineation;
+  if (!cid || cid === TEMPLATE_CASE_ID) {
+    return base;
+  }
+  const fromPrefix = `cases/${TEMPLATE_CASE_ID}/`;
+  const toPrefix = `cases/${cid}/`;
+
+  const walk = (node) => {
+    if (typeof node === 'string') {
+      return node.split(fromPrefix).join(toPrefix);
+    }
+    if (Array.isArray(node)) {
+      return node.map(walk);
+    }
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return node;
+  };
+
+  return walk(base);
+}
+
+export const caseEvidenceWorkflowOrder = ['source_to_delineation', 'section_analysis', 'model'];
+
+/** @deprecated 使用 {@link caseEvidenceWorkflowOrder} */
+export const daduheEvidenceWorkflowOrder = caseEvidenceWorkflowOrder;
+
+/**
+ * @param {string} caseId
+ * @param {string} workflowName
+ */
+export function getCaseWorkflowEvidence(caseId, workflowName) {
+  return remapWorkflowEvidenceForCase(caseId, workflowName);
+}
+
+/** @deprecated 使用 {@link getCaseWorkflowEvidence} */
 export function getDaduheWorkflowEvidence(workflowName) {
-  return WORKFLOW_EVIDENCE[workflowName] || WORKFLOW_EVIDENCE.source_to_delineation;
+  return getCaseWorkflowEvidence(TEMPLATE_CASE_ID, workflowName);
 }

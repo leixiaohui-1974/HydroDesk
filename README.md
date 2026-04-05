@@ -25,6 +25,13 @@
 | 本地推理 | Ollama + Qwen-2.5-7B |
 | 向量搜索 | Chroma (本地) |
 
+## 与仓库内 `claudecode/` 的关系
+
+HydroDesk 的早期 Agent / 编排思路对齐本仓库 **`claudecode/`**（Claude Code 还原源码、官方插件示例、Claw harness 参考）：工具层对应 Hydrology **MCP + workflows**，技能与规则对应 **Cursor rules / 案例知识壳**，多角色对应 **studio 角色与工作面**。  
+谱系说明与分层对照见：**[docs/claudecode-lineage-and-agent-stack.md](./docs/claudecode-lineage-and-agent-stack.md)**。路径常量见 **`src/config/claudecodeReference.js`**。  
+Agent 栈机器可读配置：**`../Hydrology/configs/hydrodesk_agent_stack.json`**（HydroDesk Agent 页左侧面板加载；可用 `VITE_HYDRODESK_AGENT_STACK_CONFIG` 覆盖路径）。  
+Agentic IDE **完全体路线**（Layer 0–4、多角色、**方案 A claw 底座 + gateway Hybrid**）见 **[docs/hydrodesk-agentic-ide-roadmap.md](./docs/hydrodesk-agentic-ide-roadmap.md)**。桌面壳内 Agent 页可查看 **claw / gateway 探测状态**（`probe_hydrodesk_agent_backend`）。
+
 ## 快速开始
 
 ### 前端开发（无需 Rust）

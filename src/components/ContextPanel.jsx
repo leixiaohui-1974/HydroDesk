@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { getActiveRoleAgent, getPendingApprovals, studioState } from '../data/studioState';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
-import { getDaduheWorkbenchRail, resolveDaduheShellCaseId } from '../data/daduheShell';
+import { getCaseWorkbenchRail, resolveShellCaseId } from '../data/case_contract_shell';
+import { formatCaseLabel } from '../data/caseShellPresets';
 
 const railPillStyles = {
   active: 'border-hydro-500/40 bg-hydro-500/15 text-hydro-200',
@@ -14,8 +15,8 @@ const railPillStyles = {
 export default function ContextPanel({ view }) {
   const { activeProject, activeRole, activeMode, activeSurfaceMode } = useStudioWorkspace();
   const primaryAgent = getActiveRoleAgent(view.path, activeRole);
-  const shellCaseId = resolveDaduheShellCaseId(activeProject.caseId);
-  const workbenchRail = useMemo(() => getDaduheWorkbenchRail(shellCaseId, view.path), [shellCaseId, view.path]);
+  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const workbenchRail = useMemo(() => getCaseWorkbenchRail(shellCaseId, view.path), [shellCaseId, view.path]);
   const activeStage = workbenchRail.find((stage) => stage.isActive) || null;
   const nextStage = activeStage
     ? workbenchRail.find((stage) => stage.railState === 'upcoming')
@@ -51,7 +52,7 @@ export default function ContextPanel({ view }) {
         <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs uppercase tracking-wider text-slate-500">daduhe 主链</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">{formatCaseLabel(shellCaseId)} 主链</div>
               <div className="mt-1 text-sm text-slate-200">Launch / Monitor / Review / Release</div>
             </div>
             <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-2 py-1 text-[10px] text-slate-300">

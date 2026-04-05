@@ -1,0 +1,67 @@
+{
+  "_auto_generated": true,
+  "generator": "Hydrology/scripts/export_playwright_rollout_registry.py",
+  "loop_config": "Hydrology/configs/hydrodesk_autonomous_waternet_e2e_loop.yaml",
+  "case_ids": [
+    "daduhe",
+    "yinchuojiliao",
+    "jiaodongtiaoshui",
+    "zhongxian",
+    "xuhonghe",
+    "yjdt"
+  ],
+  "full_spatial_hydro_evidence_case_ids": [
+    "daduhe"
+  ],
+  "default_active_case_id": "daduhe",
+  "registry": [
+    {
+      "id": "daduhe",
+      "name": "大渡河",
+      "caseId": "daduhe",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "yinchuojiliao",
+      "name": "引绰济辽",
+      "caseId": "yinchuojiliao",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "jiaodongtiaoshui",
+      "name": "胶东调水",
+      "caseId": "jiaodongtiaoshui",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "zhongxian",
+      "name": "中线工程",
+      "caseId": "zhongxian",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "xuhonghe",
+      "name": "徐洪河",
+      "caseId": "xuhonghe",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "yjdt",
+      "name": "雅鲁藏布江下游水电工程",
+      "caseId": "yjdt",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    }
+  ]
+}

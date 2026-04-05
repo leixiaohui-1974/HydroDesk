@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { developerSurfaces, getVisibleStudioViews } from '../config/studioViews';
+import { resolveShellCaseId } from '../data/case_contract_shell';
+import { caseWorkbenchTitle } from '../data/caseShellPresets';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 
 const iconMap = {
@@ -68,7 +70,8 @@ const iconMap = {
 };
 
 export default function Sidebar({ collapsed = false }) {
-  const { activeMode, activeSurfaceMode } = useStudioWorkspace();
+  const { activeMode, activeSurfaceMode, activeProject } = useStudioWorkspace();
+  const shellCaseId = resolveShellCaseId(activeProject?.caseId);
   const studioViews = getVisibleStudioViews(activeMode);
   const workflowOrder = ['/workbench', '/simulation', '/monitor', '/review'];
   const workflowViews = studioViews
@@ -122,11 +125,11 @@ export default function Sidebar({ collapsed = false }) {
       {!collapsed && (
         <div className="border-b border-slate-700/50 px-4 py-4">
           <div className="text-xs uppercase tracking-[0.26em] text-slate-500">HydroMind</div>
-          <div className="mt-2 text-sm font-semibold text-slate-100">daduhe Workbench</div>
+          <div className="mt-2 text-sm font-semibold text-slate-100">{caseWorkbenchTitle(shellCaseId)}</div>
           <div className="mt-1 text-xs text-slate-500">
             {activeMode === 'development'
-              ? `开发模式 · ${activeSurface.label} 工作面已激活`
-              : '发布模式 · Launch / Monitor / Review / Release 优先'}
+              ? `开发模式 · ${activeSurface.label} 工作面已激活 · 案例 ${shellCaseId || '—'}`
+              : `发布模式 · 案例 ${shellCaseId || '—'} · Launch / Monitor / Review / Release 优先`}
           </div>
         </div>
       )}
@@ -142,8 +145,8 @@ export default function Sidebar({ collapsed = false }) {
         <div className="p-3 border-t border-slate-700/50">
           <div className="rounded-lg border border-slate-700/40 bg-slate-800/70 px-3 py-2 text-[10px] text-slate-500">
             {activeMode === 'development'
-              ? `当前采用 ${activeSurface.label} / Agent / Notebook 三工作面，daduhe 主链仍固定为四段式工作台`
-              : '当前已收敛成 daduhe 四段式验收工作台'}
+              ? `当前采用 ${activeSurface.label} / Agent / Notebook 三工作面；案例 ${shellCaseId || '—'} 主链为四段式工作台`
+              : `发布模式 · 案例 ${shellCaseId || '—'} · Launch / Monitor / Review / Release 四段式验收`}
           </div>
         </div>
       )}

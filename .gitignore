@@ -36,6 +36,10 @@ yarn-error.log*
 
 # Testing
 coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Misc
 *.tsbuildinfo

@@ -4,12 +4,16 @@
 )]
 
 use serde::{Deserialize, Serialize};
-use sysinfo::{CpuExt, System, SystemExt};
+use sysinfo::System;
+use tauri::Manager;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::RunEvent;
 
 #[derive(Serialize)]
 struct SystemInfo {
@@ -94,6 +98,22 @@ struct CaseContractSummary {
     duplicate_runs: Vec<DuplicateRunSummary>,
     pending_workflows: Vec<String>,
     key_artifacts: Vec<ArtifactSummary>,
+    /// 首个存在的 `workflow_run.json` / `.contract.json` 相对路径
+    triad_workflow_run_rel: String,
+    triad_review_bundle_rel: String,
+    triad_release_manifest_rel: String,
+    /// 0–3
+    triad_count: u8,
+    release_gate_eligible: bool,
+    release_gate_blockers: Vec<String>,
+    /// `contracts/delivery_pack.latest.json` 存在时的仓库相对路径
+    delivery_pack_pointer_rel: String,
+    /// 指针文件内 `latest_pack_rel`
+    delivery_latest_pack_rel: String,
+    delivery_pack_id: String,
+    delivery_pack_updated_at: String,
+    /// 指针文件内 `eligible_at_pack_time`
+    delivery_pack_eligible_at_last_pack: bool,
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -570,6 +590,19 @@ fn repo_relative_string(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().to_string())
 }
 
+/// Run/Review/Release triad：优先 `{base}.json`，否则 `{base}.contract.json`。
+fn resolve_contract_triad_member_rel(contracts_dir: &Path, base: &str) -> String {
+    let json_path = contracts_dir.join(format!("{}.json", base));
+    if json_path.is_file() {
+        return repo_relative_string(&json_path);
+    }
+    let contract_path = contracts_dir.join(format!("{}.contract.json", base));
+    if contract_path.is_file() {
+        return repo_relative_string(&contract_path);
+    }
+    String::new()
+}
+
 fn resolve_repo_relative(path: &str) -> PathBuf {
     let candidate = PathBuf::from(path);
     if candidate.is_absolute() {
@@ -577,6 +610,27 @@ fn resolve_repo_relative(path: &str) -> PathBuf {
     } else {
         repo_root().join(candidate)
     }
+}
+
+/// 仓库根相对路径，禁止 `..` 与绝对路径，供内联编辑等写入前校验。
+fn workspace_safe_relative_path(rel: &str) -> Result<PathBuf, String> {
+    let trimmed = rel.trim();
+    if trimmed.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
+    if Path::new(trimmed).is_absolute() {
+        return Err("不允许使用绝对路径".to_string());
+    }
+    let normalized = PathBuf::from(trimmed);
+    for comp in normalized.components() {
+        use std::path::Component;
+        match comp {
+            Component::ParentDir => return Err("路径中不允许 '..'".to_string()),
+            Component::RootDir | Component::Prefix(_) => return Err("无效路径".to_string()),
+            _ => {}
+        }
+    }
+    Ok(repo_root().join(normalized))
 }
 
 fn artifact_summary_from_path(path: &Path, category: &str) -> ArtifactSummary {
@@ -658,13 +712,13 @@ fn get_system_info() -> SystemInfo {
         .unwrap_or_else(|| "Unknown".to_string());
 
     SystemInfo {
-        os_name: sys.name().unwrap_or_else(|| "Unknown".to_string()),
-        os_version: sys.os_version().unwrap_or_else(|| "Unknown".to_string()),
+        os_name: System::name().unwrap_or_else(|| "Unknown".to_string()),
+        os_version: System::os_version().unwrap_or_else(|| "Unknown".to_string()),
         cpu_brand,
         cpu_count: sys.cpus().len(),
         total_memory_mb: sys.total_memory() / 1024 / 1024,
         used_memory_mb: sys.used_memory() / 1024 / 1024,
-        hostname: sys.host_name().unwrap_or_else(|| "Unknown".to_string()),
+        hostname: System::host_name().unwrap_or_else(|| "Unknown".to_string()),
     }
 }
 
@@ -853,6 +907,7 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         ("verification-report-md", contracts_dir.join("e2e_outcome_verification_report.md")),
         ("verification-report-json", contracts_dir.join("e2e_outcome_verification_report.json")),
         ("baseline", contracts_dir.join("e2e_verification_baseline.json")),
+        ("delivery-pack-pointer", contracts_dir.join("delivery_pack.latest.json")),
     ];
     let mut key_artifacts = Vec::new();
     for (category, path) in key_artifact_paths {
@@ -865,6 +920,86 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         key_artifacts.push(artifact_summary_from_path(&outcomes_dir, "outcomes-dir"));
     }
     key_artifacts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let gate_status_str = coverage
+        .get("gate_status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let closure_check_passed = verification
+        .pointer("/stage2_execution_integrity/closure_check_passed")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let verification_exists = verification_path.is_file();
+
+    let tri_wr = resolve_contract_triad_member_rel(&contracts_dir, "workflow_run");
+    let tri_rb = resolve_contract_triad_member_rel(&contracts_dir, "review_bundle");
+    let tri_rm = resolve_contract_triad_member_rel(&contracts_dir, "release_manifest");
+    let mut triad_count: u8 = 0;
+    if !tri_wr.is_empty() {
+        triad_count += 1;
+    }
+    if !tri_rb.is_empty() {
+        triad_count += 1;
+    }
+    if !tri_rm.is_empty() {
+        triad_count += 1;
+    }
+
+    let mut release_gate_blockers: Vec<String> = Vec::new();
+    if tri_wr.is_empty() {
+        release_gate_blockers.push("缺少 workflow_run（.json / .contract.json）".to_string());
+    }
+    if tri_rb.is_empty() {
+        release_gate_blockers.push("缺少 review_bundle（.json / .contract.json）".to_string());
+    }
+    if tri_rm.is_empty() {
+        release_gate_blockers.push("缺少 release_manifest（.json / .contract.json）".to_string());
+    }
+    if verification_exists && !closure_check_passed {
+        release_gate_blockers.push("e2e_outcome_verification_report：closure_check_passed 为 false".to_string());
+    }
+    if !pending_workflows.is_empty() {
+        release_gate_blockers.push(format!(
+            "verification pending_workflows 非空（{} 项）",
+            pending_workflows.len()
+        ));
+    }
+    if gate_status_str == "blocked" {
+        release_gate_blockers.push("outcome_coverage_report gate_status=blocked".to_string());
+    }
+    let release_gate_eligible = release_gate_blockers.is_empty();
+
+    let delivery_pointer_path = contracts_dir.join("delivery_pack.latest.json");
+    let mut delivery_pack_pointer_rel = String::new();
+    let mut delivery_latest_pack_rel = String::new();
+    let mut delivery_pack_id = String::new();
+    let mut delivery_pack_updated_at = String::new();
+    let mut delivery_pack_eligible_at_last_pack = false;
+    if delivery_pointer_path.is_file() {
+        delivery_pack_pointer_rel = repo_relative_string(&delivery_pointer_path);
+        if let Some(ptr) = read_json_value(&delivery_pointer_path) {
+            delivery_latest_pack_rel = ptr
+                .get("latest_pack_rel")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            delivery_pack_id = ptr
+                .get("pack_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            delivery_pack_updated_at = ptr
+                .get("updated_at")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            delivery_pack_eligible_at_last_pack = ptr
+                .get("eligible_at_pack_time")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+        }
+    }
 
     Ok(CaseContractSummary {
         case_id: case_id.clone(),
@@ -892,15 +1027,23 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         normalized_outcome_coverage: coverage.get("outcome_coverage").and_then(|value| value.as_f64()).unwrap_or_default(),
         schema_valid_count: coverage.get("schema_valid_count").and_then(|value| value.as_u64()).unwrap_or_default(),
         evidence_bound_count: coverage.get("evidence_bound_count").and_then(|value| value.as_u64()).unwrap_or_default(),
-        gate_status: coverage.get("gate_status").and_then(|value| value.as_str()).unwrap_or("unknown").to_string(),
+        gate_status: gate_status_str,
         verification_generated_at: verification.get("generated_at").and_then(|value| value.as_str()).unwrap_or_default().to_string(),
-        closure_check_passed: verification
-            .pointer("/stage2_execution_integrity/closure_check_passed")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
+        closure_check_passed,
         duplicate_runs,
         pending_workflows,
         key_artifacts,
+        triad_workflow_run_rel: tri_wr,
+        triad_review_bundle_rel: tri_rb,
+        triad_release_manifest_rel: tri_rm,
+        triad_count,
+        release_gate_eligible,
+        release_gate_blockers,
+        delivery_pack_pointer_rel,
+        delivery_latest_pack_rel,
+        delivery_pack_id,
+        delivery_pack_updated_at,
+        delivery_pack_eligible_at_last_pack,
     })
 }
 
@@ -1158,6 +1301,63 @@ fn get_execution_history() -> Result<Vec<WorkflowRunRecord>, String> {
 }
 
 #[tauri::command]
+fn workspace_path_exists(rel_path: String) -> Result<bool, String> {
+    let path = workspace_safe_relative_path(&rel_path)?;
+    Ok(path.exists())
+}
+
+#[tauri::command]
+fn resolve_first_existing_workspace_path(rel_paths: Vec<String>) -> Result<Option<String>, String> {
+    for rel in rel_paths {
+        let trimmed = rel.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = workspace_safe_relative_path(trimmed)?;
+        if path.exists() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+fn read_workspace_text_file_first_of(rel_paths: Vec<String>) -> Result<String, String> {
+    for rel in rel_paths {
+        let trimmed = rel.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = workspace_safe_relative_path(trimmed)?;
+        if path.is_file() {
+            return fs::read_to_string(&path).map_err(|err| err.to_string());
+        }
+    }
+    Err("未找到任何可读文件".to_string())
+}
+
+#[tauri::command]
+fn read_workspace_text_file(rel_path: String) -> Result<String, String> {
+    let path = workspace_safe_relative_path(&rel_path)?;
+    if !path.exists() {
+        return Err(format!("文件不存在: {}", rel_path));
+    }
+    if !path.is_file() {
+        return Err("路径不是普通文件".to_string());
+    }
+    fs::read_to_string(&path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn write_workspace_text_file(rel_path: String, content: String) -> Result<(), String> {
+    let path = workspace_safe_relative_path(&rel_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::write(&path, content.as_bytes()).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn open_path(target_path: String) -> Result<bool, String> {
     let path = resolve_repo_relative(&target_path);
     if !path.exists() {
@@ -1215,14 +1415,45 @@ fn delete_path(target_path: String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// 阻断常见命令替换注入（`...` 与 `$(...)`）。IDE / rg / python3 单条命令仍可执行。
+fn assert_workspace_command_safety(command: &str) -> Result<(), String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("命令不能为空".to_string());
+    }
+    if trimmed.as_bytes().contains(&0) {
+        return Err("命令包含非法空字节".to_string());
+    }
+    if trimmed.contains('`') || trimmed.contains("$(") {
+        return Err("禁止命令替换：命令中不得包含反引号或 $( 片段".to_string());
+    }
+    Ok(())
+}
+
+fn extract_topology_live_payload(text: &str) -> Option<serde_json::Value> {
+    const START: &str = "<<<HYDRODESK_TOPOLOGY_JSON\n";
+    const END: &str = "\n>>>HYDRODESK_TOPOLOGY_JSON";
+    let start_idx = text.find(START)?;
+    let rest = &text[start_idx + START.len()..];
+    let end_rel = rest.find(END)?;
+    let json_str = rest[..end_rel].trim();
+    serde_json::from_str(json_str).ok()
+}
+
 #[tauri::command]
-fn run_workspace_command(command: String, cwd: Option<String>) -> Result<WorkspaceCommandResult, String> {
+fn run_workspace_command(
+    app: tauri::AppHandle,
+    command: String,
+    cwd: Option<String>,
+) -> Result<WorkspaceCommandResult, String> {
     let cwd_path = cwd
         .map(|value| resolve_repo_relative(&value))
         .unwrap_or_else(repo_root);
     if !cwd_path.exists() {
         return Err(format!("工作目录不存在: {}", cwd_path.display()));
     }
+
+    assert_workspace_command_safety(&command)?;
 
     let output = Command::new("sh")
         .arg("-lc")
@@ -1231,18 +1462,281 @@ fn run_workspace_command(command: String, cwd: Option<String>) -> Result<Workspa
         .output()
         .map_err(|err| err.to_string())?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let topology_payload = extract_topology_live_payload(&stderr)
+        .or_else(|| extract_topology_live_payload(&stdout));
+    if let Some(payload) = topology_payload {
+        let _ = app.emit_all("hydrodesk-topology-live", payload);
+    }
+
     Ok(WorkspaceCommandResult {
         command,
         cwd: cwd_path.to_string_lossy().to_string(),
         status: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout,
+        stderr,
         success: output.status.success(),
     })
 }
 
+/// Phase 1 Hybrid：探测本仓 claw-code 构建产物与 agent_loop_gateway，供 Agent 工作面展示「方案 A 就绪」状态。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HydrodeskAgentBackendProbe {
+    claw_binary_rel: Option<String>,
+    agent_loop_gateway_rel: String,
+    scheme_a_ready: bool,
+    integration_note_zh: String,
+}
+
+#[tauri::command]
+fn probe_hydrodesk_agent_backend() -> Result<HydrodeskAgentBackendProbe, String> {
+    let root = repo_root();
+    let claw_bin = if cfg!(target_os = "windows") {
+        "claw.exe"
+    } else {
+        "claw"
+    };
+    let claw_candidates = [
+        root
+            .join("claudecode/claw-code/rust/target/release")
+            .join(claw_bin),
+        root.join("claudecode/claw-code/rust/target/debug").join(claw_bin),
+    ];
+    let mut claw_binary_rel: Option<String> = None;
+    for path in claw_candidates {
+        if path.is_file() {
+            claw_binary_rel = Some(repo_relative_string(&path));
+            break;
+        }
+    }
+    let gateway_path = root.join("Hydrology/workflows/agent_loop_gateway.py");
+    let agent_loop_gateway_rel = if gateway_path.is_file() {
+        repo_relative_string(&gateway_path)
+    } else {
+        "Hydrology/workflows/agent_loop_gateway.py".to_string()
+    };
+    let scheme_a_ready = claw_binary_rel.is_some();
+    let integration_note_zh = if scheme_a_ready {
+        "已检测到本地构建的 claw 可执行文件。当前上游 CLI 以 prompt/REPL 为主；IDE 全双工建议 Hybrid：会话内用 agent_loop_gateway 管道保障工具环，按需按轮调用 claw 承担强推理（需配置 API/OAuth）。"
+            .to_string()
+    } else {
+        "未检测到 claw 二进制。请在 claudecode/claw-code/rust 下执行 cargo build -p claw-cli，或使用 agent_loop_gateway 作为 Phase 1 工具后端。"
+            .to_string()
+    };
+    Ok(HydrodeskAgentBackendProbe {
+        claw_binary_rel,
+        agent_loop_gateway_rel,
+        scheme_a_ready,
+        integration_note_zh,
+    })
+}
+
+/// agent_loop_gateway.py --oneshot：无 shell 拼接，由 Rust 传 JSON 参数（Phase 1 工具环）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentLoopGatewayOneshotResult {
+    success: bool,
+    return_code: i32,
+    /// 解析成功的 stdout 首行 JSON；失败时为 null
+    response: Option<serde_json::Value>,
+    stderr: String,
+    raw_stdout: String,
+}
+
+#[tauri::command]
+fn agent_loop_gateway_oneshot(request: serde_json::Value) -> Result<AgentLoopGatewayOneshotResult, String> {
+    let root = repo_root();
+    let gateway = root.join("Hydrology/workflows/agent_loop_gateway.py");
+    if !gateway.is_file() {
+        return Err(format!(
+            "未找到网关脚本: {}",
+            gateway.display()
+        ));
+    }
+    let line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+    let output = Command::new("python3")
+        .arg(gateway.as_os_str())
+        .arg("--oneshot")
+        .arg(&line)
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("执行 python3 失败: {e}"))?;
+    let raw_stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let response: Option<serde_json::Value> = if raw_stdout.is_empty() {
+        None
+    } else {
+        serde_json::from_str(&raw_stdout).ok()
+    };
+    Ok(AgentLoopGatewayOneshotResult {
+        success: output.status.success(),
+        return_code: output.status.code().unwrap_or(-1),
+        response,
+        stderr,
+        raw_stdout,
+    })
+}
+
+/// 常驻 agent_loop_gateway 子进程（stdio 多轮 NDJSON）；与 --oneshot 互补。
+struct GatewaySessionInner {
+    child: Child,
+    stdin: ChildStdin,
+}
+
+type SharedGatewaySession = Arc<Mutex<Option<GatewaySessionInner>>>;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentLoopGatewaySessionStatus {
+    active: bool,
+    pid: Option<u32>,
+}
+
+fn spawn_gateway_stdout_reader(app: tauri::AppHandle, session: SharedGatewaySession, stdout: std::process::ChildStdout) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(l) => {
+                    let _ = app.emit_all("agent-loop-gateway-line", l);
+                }
+                Err(_) => break,
+            }
+        }
+        let mut guard = match session.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Some(mut inner) = guard.take() {
+            let _ = inner.child.wait();
+        }
+        let _ = app.emit_all(
+            "agent-loop-gateway-session-ended",
+            serde_json::json!({ "reason": "stdout_closed" }),
+        );
+    });
+}
+
+fn spawn_gateway_stderr_reader(app: tauri::AppHandle, stderr: std::process::ChildStderr) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            let _ = app.emit_all("agent-loop-gateway-stderr", line);
+        }
+    });
+}
+
+#[tauri::command]
+fn agent_loop_gateway_session_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedGatewaySession>,
+) -> Result<AgentLoopGatewaySessionStatus, String> {
+    let root = repo_root();
+    let gateway = root.join("Hydrology/workflows/agent_loop_gateway.py");
+    if !gateway.is_file() {
+        return Err(format!("未找到网关脚本: {}", gateway.display()));
+    }
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Err("agent_loop_gateway 常驻会话已存在，请先停止".into());
+    }
+    let mut child = Command::new("python3")
+        .arg(gateway.as_os_str())
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 python3 失败: {e}"))?;
+    let pid = child.id();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法打开网关 stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法打开网关 stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法打开网关 stderr".to_string())?;
+    let session_for_stdout = Arc::clone(&*state);
+    spawn_gateway_stdout_reader(app.clone(), session_for_stdout, stdout);
+    spawn_gateway_stderr_reader(app, stderr);
+    *guard = Some(GatewaySessionInner { child, stdin });
+    Ok(AgentLoopGatewaySessionStatus {
+        active: true,
+        pid: Some(pid),
+    })
+}
+
+#[tauri::command]
+fn agent_loop_gateway_session_send(
+    line: String,
+    state: tauri::State<'_, SharedGatewaySession>,
+) -> Result<(), String> {
+    if line.chars().any(|c| c == '\n' || c == '\r') {
+        return Err("禁止在单行请求内包含换行".into());
+    }
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    let inner = guard
+        .as_mut()
+        .ok_or_else(|| "未启动常驻会话，请先「启动常驻网关」".to_string())?;
+    inner
+        .stdin
+        .write_all(line.as_bytes())
+        .map_err(|e| format!("写入 stdin 失败: {e}"))?;
+    inner
+        .stdin
+        .write_all(b"\n")
+        .map_err(|e| format!("写入 stdin 失败: {e}"))?;
+    inner
+        .stdin
+        .flush()
+        .map_err(|e| format!("flush stdin 失败: {e}"))?;
+    Ok(())
+}
+
+fn gateway_session_stop_inner(session: &SharedGatewaySession) {
+    if let Ok(mut guard) = session.lock() {
+        if let Some(mut inner) = guard.take() {
+            let _ = inner.child.kill();
+            let _ = inner.child.wait();
+        }
+    }
+}
+
+#[tauri::command]
+fn agent_loop_gateway_session_stop(state: tauri::State<'_, SharedGatewaySession>) -> Result<(), String> {
+    gateway_session_stop_inner(&*state);
+    Ok(())
+}
+
+#[tauri::command]
+fn agent_loop_gateway_session_status(
+    state: tauri::State<'_, SharedGatewaySession>,
+) -> Result<AgentLoopGatewaySessionStatus, String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    Ok(match guard.as_ref() {
+        Some(inner) => AgentLoopGatewaySessionStatus {
+            active: true,
+            pid: Some(inner.child.id()),
+        },
+        None => AgentLoopGatewaySessionStatus {
+            active: false,
+            pid: None,
+        },
+    })
+}
+
 fn main() {
+    let gateway_session: SharedGatewaySession = Arc::new(Mutex::new(None));
     tauri::Builder::default()
+        .manage(gateway_session)
         .invoke_handler(tauri::generate_handler![
             greet,
             get_system_info,
@@ -1262,8 +1756,26 @@ fn main() {
             reveal_path,
             rename_path,
             delete_path,
+            read_workspace_text_file,
+            read_workspace_text_file_first_of,
+            write_workspace_text_file,
+            workspace_path_exists,
+            resolve_first_existing_workspace_path,
             run_workspace_command,
+            probe_hydrodesk_agent_backend,
+            agent_loop_gateway_oneshot,
+            agent_loop_gateway_session_start,
+            agent_loop_gateway_session_send,
+            agent_loop_gateway_session_stop,
+            agent_loop_gateway_session_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running HydroDesk");
+        .build(tauri::generate_context!())
+        .expect("error while building HydroDesk")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                if let Some(st) = app_handle.try_state::<SharedGatewaySession>() {
+                    gateway_session_stop_inner(&*st);
+                }
+            }
+        });
 }
