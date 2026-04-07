@@ -3,22 +3,29 @@
   "generator": "Hydrology/scripts/export_playwright_rollout_registry.py",
   "loop_config": "Hydrology/configs/hydrodesk_autonomous_waternet_e2e_loop.yaml",
   "case_ids": [
-    "daduhe",
-    "yinchuojiliao",
-    "jiaodongtiaoshui",
     "zhongxian",
     "xuhonghe",
+    "yinchuojiliao",
+    "jiaodongtiaoshui",
     "yjdt"
   ],
   "full_spatial_hydro_evidence_case_ids": [
-    "daduhe"
+    "zhongxian"
   ],
-  "default_active_case_id": "daduhe",
+  "default_active_case_id": "zhongxian",
   "registry": [
     {
-      "id": "daduhe",
-      "name": "大渡河",
-      "caseId": "daduhe",
+      "id": "zhongxian",
+      "name": "中线工程",
+      "caseId": "zhongxian",
+      "status": "active",
+      "stage": "V2_E2E",
+      "source": "playwright_fixture"
+    },
+    {
+      "id": "xuhonghe",
+      "name": "徐洪河",
+      "caseId": "xuhonghe",
       "status": "active",
       "stage": "V2_E2E",
       "source": "playwright_fixture"
@@ -35,22 +42,6 @@
       "id": "jiaodongtiaoshui",
       "name": "胶东调水",
       "caseId": "jiaodongtiaoshui",
-      "status": "active",
-      "stage": "V2_E2E",
-      "source": "playwright_fixture"
-    },
-    {
-      "id": "zhongxian",
-      "name": "中线工程",
-      "caseId": "zhongxian",
-      "status": "active",
-      "stage": "V2_E2E",
-      "source": "playwright_fixture"
-    },
-    {
-      "id": "xuhonghe",
-      "name": "徐洪河",
-      "caseId": "xuhonghe",
       "status": "active",
       "stage": "V2_E2E",
       "source": "playwright_fixture"
