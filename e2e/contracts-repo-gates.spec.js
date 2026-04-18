@@ -11,6 +11,31 @@ import {
 
 assertRolloutCaseIdsAligned();
 
+const PLATFORM_GOVERNANCE_INDEX = path.join(
+  WORKSPACE_ROOT,
+  'Hydrology/configs/platform_governance_gates.index.json',
+);
+
+test.describe('平台治理门索引（Hydrology/configs）', () => {
+  test('platform_governance_gates.index.json 存在且含三门', () => {
+    expect(fs.existsSync(PLATFORM_GOVERNANCE_INDEX), '缺少治理门索引文件').toBe(true);
+    const idx = JSON.parse(fs.readFileSync(PLATFORM_GOVERNANCE_INDEX, 'utf8'));
+    expect(idx.schema).toBe('platform_governance_gates.index');
+    expect(typeof idx.version).toBe('number');
+    expect(Array.isArray(idx.gates)).toBe(true);
+    expect(idx.gates.length).toBe(3);
+    const keys = idx.gates.map((g) => g.key).sort();
+    expect(keys).toEqual(['assimilation', 'coupling', 'hydraulics']);
+    for (const g of idx.gates) {
+      expect(Array.isArray(g.path_template_chain), `${g.key}: path_template_chain`).toBe(true);
+      expect(g.path_template_chain.length).toBeGreaterThan(0);
+      for (const tpl of g.path_template_chain) {
+        expect(tpl).toContain('{case_id}');
+      }
+    }
+  });
+});
+
 test.describe('仓库契约门禁（Node：与 HydroDesk 展示路径一致）', () => {
   for (const caseId of ROLLOUT_CASE_IDS) {
     test(`rollout · ${caseId} · 必达产物在仓库中存在`, () => {

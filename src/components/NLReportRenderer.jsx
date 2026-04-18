@@ -38,7 +38,7 @@ export default function NLReportRenderer({ report }) {
   const validEntities = report.entities?.filter(e => e.lat && e.lng) || [];
   const mapCenter = validEntities.length > 0 
     ? [validEntities[0].lat, validEntities[0].lng] 
-    : [30.12, 102.50]; // Fallback to Daduhe roughly around there
+    : [30.12, 102.50]; // Fallback coordinates
 
   // Render sub-sections dynamically based on the NLP/MCP outcome object
   return (

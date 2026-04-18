@@ -29,8 +29,8 @@ export const hydroPortfolioCatalog = [
     primarySurface: 'product',
     summary: '运行时编排、控制器 runner、solver engine 与示范闭环案例模块等能力集中在这里。',
     directories: ['pipedream_platform/runtime/', 'pipedream_platform/solver/', 'universal_autonomous_architecture/'],
-    files: ['pipedream_platform/runtime/orchestration.py', 'pipedream_platform/runtime/controller_runner.py', 'universal_autonomous_architecture/daduhe_case.py'],
-    integrationNote: 'pipedream 侧闭环仿真链（如 daduhe_pipedream_ext 注册键）由它主导执行与编排。',
+    files: ['pipedream_platform/runtime/orchestration.py', 'pipedream_platform/runtime/controller_runner.py', 'universal_autonomous_architecture/'],
+    integrationNote: 'pipedream 侧闭环仿真链（legacy external workflow 注册键）由它主导执行与编排。',
   },
   {
     id: 'e2econtrol',

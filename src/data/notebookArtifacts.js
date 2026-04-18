@@ -92,7 +92,9 @@ ${notes.release || ''}
 `;
 }
 
-export function buildReleaseNoteMarkdown(caseId, projectName, notes, contracts, metadata = buildDefaultNotebookMetadata(), releaseEvidenceAssets = []) {
+export function buildReleaseNoteMarkdown(caseId, projectName, notes, contracts, metadata = buildDefaultNotebookMetadata(), releaseEvidenceAssets = [], governanceGates = []) {
+  const gatesSummary = governanceGates.map((g) => `- ${g.label}: ${g.status} (${g.hint})`).join('\n');
+
   return `# HydroDesk Release Note
 
 - 项目: ${projectName}
@@ -108,6 +110,10 @@ ${notes.baseline || ''}
 ## Evidence Snapshot
 
 ${notes.evidence || ''}
+
+## Governance Gates (Hydraulics / Coupling / Assimilation)
+
+${gatesSummary || '- (No governance gates loaded)'}
 
 ## Contract Triad
 

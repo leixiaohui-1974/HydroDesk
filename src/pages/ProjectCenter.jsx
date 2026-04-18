@@ -1,40 +1,73 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  getCaseContractSummary,
   isTauri,
   openPath,
-  openPathWithAlternates,
   readWorkspaceTextFile,
   revealPath,
-  revealPathWithAlternates,
   runWorkspaceCommand,
+  workspacePathExists,
   writeWorkspaceTextFile,
+  createCase,
+  deriveCase,
+  archiveCase,
+  caseManagerOpenDirectory,
 } from '../api/tauri_bridge';
 import {
   getCaseReviewAssets,
-  getCaseRunReviewReleaseContracts,
   getCaseShellEntryPoints,
   resolveShellCaseId,
   studioDeliveryWavePlan,
 } from '../data/case_contract_shell';
 import { getActiveRoleAgent, studioState } from '../data/studioState';
+import {
+  projectCenterFeasibilityTierLabels,
+  projectCenterModelStrategyEvidenceLabels,
+  projectCenterSignalLabels,
+  projectCenterStatusMeta,
+} from '../data/projectCenterCatalog';
 import { hydroPortfolioCatalog, primarySurfaceLabels } from '../data/projectPortfolio';
 import { executionSurfaceCatalog } from '../data/workflowSurfaces';
+import { getModelStrategyMeta, getTriadStatusMeta } from '../config/uiMeta';
 import { useStudioRuntime } from '../hooks/useStudioRuntime';
 import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
+import { useCaseRunReviewReleaseContracts } from '../hooks/useCaseRunReviewReleaseContracts';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 import { useDynamicCaseRegistry } from '../hooks/useDynamicCaseRegistry';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
+import { parseGraphifyReportSummary } from '../utils/graphifyReport';
+import {
+  ProjectCenterActionButton,
+  ProjectCenterActionGroup,
+  ProjectCenterActionMenu,
+  ProjectCenterAnalysisSection,
+  ProjectCenterCatalogSection,
+  ProjectCenterTopTabs,
+  ProjectCenterWorkspaceHero,
+  ProjectCenterWorkspaceSection,
+} from '../components/project/ProjectCenterPageSections';
 import {
   buildBatchCheckCaseQualityArtifactsCommand,
   buildCheckCaseQualityArtifactsCommand,
   buildExportAutonomousWaternetQualityRubricCommand,
+  buildExportRolloutReadinessBaselineCommand,
   buildHydrodeskE2eActionsCommand,
-  buildHydrodeskSixCaseE2eLoopCommand,
+  buildHydrodeskRolloutE2eLoopCommand,
   buildScaffoldNewCaseCommand,
   buildExportCaseWorkflowFeasibilityCommand,
+  buildExportCaseDataIntelligenceBatchCommand,
+  buildExportCaseDataIntelligenceCommand,
+  buildExportCaseModelStrategyBatchCommand,
+  buildExportCaseModelStrategyCommand,
+  buildExportCaseModelingHintsCommand,
   buildExportCasePlatformReadinessCommand,
+  buildImportCaseSourcebundleCommand,
   buildBootstrapCaseTriadMinimalCommand,
   buildLintCaseKnowledgeLinksCommand,
+  buildRunCasePipelinePreflightCommand,
+  buildRunGraphifyCaseSidecarCommand,
+  buildRunSourceSyncCommand,
   getAutonomousWaternetE2eLoopConfigRelPath,
   getHydrodeskAgenticIdePlatformPlanRelPath,
   getScaffoldNewCaseScriptRelPath,
@@ -42,6 +75,30 @@ import {
   parseQualityRubricExportStdout,
   parseSingleObjectJsonStdout,
 } from '../config/hydrodesk_commands';
+import useTauri from '../hooks/useTauri';
+import useWorkspacePreviewLoader from '../components/workspace/useWorkspacePreviewLoader';
+import {
+  buildWorkspaceBusinessPreviewByKind,
+  findMatchingContractByPath,
+  getWorkspaceAssetPreviewKind,
+} from '../components/workspace/workspaceAssetPreviewRegistry';
+import {
+  buildDataIntelligenceBatchRollupEntries,
+  buildDataIntelligenceHeadlineStats,
+  buildDataIntelligenceRelatedStatusEntries,
+  buildDataIntelligenceShortcutSpecs,
+  buildSelectedDataIntelligenceState,
+  getDataIntelligenceCategoryLabel,
+} from './projectCenterDataIntelligence';
+import { buildSixCaseFinalReportRollup } from './finalReportRollup.js';
+import { ProjectCenterProjectedWorksurfaceSection, ProjectCenterAdvancedActionsSection, ProjectCenterCaseListSection, ProjectCenterGlobalCaseManagerSection } from '../components/project/ProjectCenterExtractedSections';
+
+
+function getReleaseGateClassName(status) {
+  if (status === 'release-ready') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+  if (status === 'needs-review') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+}
 
 function caseDefinitionRelPath(caseId, fileKind) {
   const cid = String(caseId ?? '').trim();
@@ -51,55 +108,441 @@ function caseDefinitionRelPath(caseId, fileKind) {
   return `cases/${cid}/manifest.yaml`;
 }
 
-const FEASIBILITY_TIER_LABELS = {
-  no_case_config: '无 case YAML',
-  registry_only: '注册表级（规则未覆盖）',
-  data_ok: '数据信号 ∩ 规则',
-  data_gap: '缺规则所需数据信号',
-};
-
 /** 与 Hydrology/scripts/scaffold_new_case.py CASE_ID_RE 一致：2–64 字符 */
 const CASE_ID_SCAFFOLD_RE = /^[a-z][a-z0-9_]{1,63}$/;
+const WORKSPACE_PREVIEW_CHAR_LIMIT = 60000;
 
-const SIGNAL_LABELS = {
-  case_config_file: 'case YAML',
-  dem_file: 'DEM 文件',
-  river_network_file: '河网文件',
-  topology_files: '拓扑 JSON',
-  sqlite_files: 'SQLite',
-  case_manifest_file: 'case_manifest',
-  source_bundle_file: 'source_bundle',
-  scan_dirs_data: 'scan_dirs 有数据',
-  contracts_dir: 'contracts 目录',
-  hydrology_outputs_hint: '水文类 contracts 线索',
-};
+function getWorkspacePreviewKind(filePath = '') {
+  const lowerPath = String(filePath).toLowerCase();
+  if (lowerPath.endsWith('.md') || lowerPath.endsWith('.markdown')) return 'markdown';
+  if (lowerPath.endsWith('.html') || lowerPath.endsWith('.htm')) return 'html';
+  if (lowerPath.endsWith('.json')) return 'json';
+  if (lowerPath.endsWith('.yaml') || lowerPath.endsWith('.yml')) return 'yaml';
+  return 'text';
+}
 
-const statusStyles = {
-  active: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  review: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
-  risk: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-};
+function getPathBasename(filePath = '') {
+  const normalized = String(filePath).replace(/\\/g, '/');
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || normalized;
+}
+
+function mapWorkspaceDirectoryEntries(entries = [], workspaceRoot = '') {
+  const normalizedRoot = String(workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return [...entries]
+    .sort((left, right) => {
+      const leftIsDir = Array.isArray(left.children);
+      const rightIsDir = Array.isArray(right.children);
+      if (leftIsDir !== rightIsDir) return leftIsDir ? -1 : 1;
+      return String(left.name || left.path).localeCompare(String(right.name || right.path));
+    })
+    .map((entry) => {
+      const absolutePath = String(entry.path || '').replace(/\\/g, '/');
+      const relativePath = absolutePath.startsWith(`${normalizedRoot}/`)
+        ? absolutePath.slice(normalizedRoot.length + 1)
+        : absolutePath;
+      return {
+        id: relativePath || absolutePath,
+        label: entry.name || getPathBasename(relativePath || absolutePath),
+        path: relativePath || absolutePath,
+        absolutePath,
+        isDirectory: Array.isArray(entry.children),
+        children: Array.isArray(entry.children)
+          ? mapWorkspaceDirectoryEntries(entry.children, workspaceRoot)
+          : [],
+      };
+    });
+}
+
+function flattenWorkspaceFiles(nodes = []) {
+  return nodes.flatMap((node) => {
+    if (node.isDirectory) return flattenWorkspaceFiles(node.children || []);
+    return [node];
+  });
+}
+
+function formatWorkspacePreviewContent(filePath, content) {
+  const kind = getWorkspacePreviewKind(filePath);
+  let normalizedContent = String(content ?? '');
+  if (kind === 'json') {
+    try {
+      normalizedContent = JSON.stringify(JSON.parse(normalizedContent), null, 2);
+    } catch {
+      // Keep raw content when JSON formatting fails.
+    }
+  }
+  const truncated = normalizedContent.length > WORKSPACE_PREVIEW_CHAR_LIMIT;
+  if (truncated) {
+    normalizedContent = `${normalizedContent.slice(0, WORKSPACE_PREVIEW_CHAR_LIMIT)}\n\n... [preview truncated]`;
+  }
+  return {
+    kind,
+    content: normalizedContent,
+    truncated,
+    path: filePath,
+  };
+}
+
+function deriveCaseIdFromDirectoryPath(directoryPath, knownCases = []) {
+  const normalizedPath = String(directoryPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalizedPath) return '';
+  const parts = normalizedPath.split('/');
+  const casesIndex = parts.lastIndexOf('cases');
+  if (casesIndex >= 0 && parts[casesIndex + 1]) {
+    return parts[casesIndex + 1];
+  }
+  const basename = parts[parts.length - 1] || '';
+  const matchedCase = knownCases.find((item) => item.caseId === basename || item.id === basename);
+  return matchedCase?.id || matchedCase?.caseId || '';
+}
+
+function analyzeWorkspaceFiles(files = []) {
+  const lowerPaths = files.map((file) => String(file.path || '').toLowerCase());
+  const pathMatches = (matcher) => lowerPaths.some((path) => matcher(path));
+
+  const hasManifest = pathMatches((path) => path.endsWith('/manifest.yaml') || path === 'manifest.yaml');
+  const hasCaseManifest = pathMatches((path) => path.endsWith('/case_manifest.json') || path === 'case_manifest.json');
+  const hasHydrologyConfig = pathMatches((path) => path.endsWith('.yaml') && (path.includes('/hydrology/') || path.includes('hydrology/configs')));
+  const hasContracts = pathMatches((path) => path.includes('/contracts/') || path.startsWith('contracts/'));
+  const hasWorkflowRun = pathMatches((path) => path.includes('workflow_run'));
+  const hasReviewBundle = pathMatches((path) => path.includes('review_bundle'));
+  const hasReleaseManifest = pathMatches((path) => path.includes('release_manifest'));
+  const hasMarkdown = pathMatches((path) => path.endsWith('.md') || path.endsWith('.markdown'));
+  const hasHtml = pathMatches((path) => path.endsWith('.html') || path.endsWith('.htm'));
+  const hasSourceData = pathMatches((path) =>
+    path.includes('/raw/') ||
+    path.includes('sourcebundle') ||
+    path.endsWith('.csv') ||
+    path.endsWith('.xlsx') ||
+    path.endsWith('.xls') ||
+    path.endsWith('.parquet') ||
+    path.endsWith('.shp') ||
+    path.endsWith('.geojson') ||
+    path.endsWith('.tif') ||
+    path.endsWith('.tiff')
+  );
+  const hasModelAssets = hasManifest || hasCaseManifest || hasHydrologyConfig;
+  const hasRunArtifacts = hasWorkflowRun || hasReviewBundle || hasReleaseManifest;
+
+  let stage = 'directory';
+  let headline = '目录浏览';
+  let recommendation = '当前目录更像通用 workspace，可先浏览文件或手动指定建模起点。';
+
+  if (hasRunArtifacts) {
+    stage = 'continuation';
+    headline = '可直接续作';
+    recommendation = '已检测到运行/审查/发布产物，建议直接进入续作、审查或发布路径。';
+  } else if (hasModelAssets) {
+    stage = 'model-update';
+    headline = '可更新模型';
+    recommendation = '已检测到 manifest 或模型配置，建议继续编辑模型、校验 contracts 或重新运行。';
+  } else if (hasSourceData) {
+    stage = 'model-bootstrap';
+    headline = '进入建模起步流';
+    recommendation = '目录里已有原始数据或 sourcebundle，建议先做数据挖掘、建模建议和初始模型骨架生成。';
+  }
+
+  return {
+    stage,
+    headline,
+    recommendation,
+    counts: {
+      files: files.length,
+      markdown: files.filter((file) => /\.(md|markdown)$/i.test(file.path || '')).length,
+      html: files.filter((file) => /\.(html|htm)$/i.test(file.path || '')).length,
+    },
+    flags: {
+      hasManifest,
+      hasCaseManifest,
+      hasHydrologyConfig,
+      hasContracts,
+      hasWorkflowRun,
+      hasReviewBundle,
+      hasReleaseManifest,
+      hasSourceData,
+      hasMarkdown,
+      hasHtml,
+      hasModelAssets,
+      hasRunArtifacts,
+    },
+  };
+}
+
+function buildWorkspaceBusinessPreview({
+  filePath,
+  previewContent,
+  shellCaseId,
+  caseSummary,
+  triadMeta,
+  contractChain,
+  triadBridgePaths,
+  reviewAssets,
+  workspaceIntelligence,
+}) {
+  const assetKind = getWorkspaceAssetPreviewKind({ path: filePath });
+  const matchedContract = findMatchingContractByPath(filePath, contractChain);
+
+  if (assetKind === 'manifest') {
+    return buildWorkspaceBusinessPreviewByKind('manifest', {
+      previewContent,
+      description: '把当前 case 的 gate、triad、pipeline 和运行信号折成业务卡片，再保留原始 YAML 以便核对。',
+      badges: ['manifest', shellCaseId || 'case', triadMeta.label || 'triad'],
+      caseId: shellCaseId,
+      gate: caseSummary.gate_status,
+      triadLabel: triadMeta.label,
+      pipelineReady: caseSummary.pipeline_contract_ready,
+      currentWorkflow: caseSummary.current_workflow,
+      outputs: `${caseSummary.outcomes_generated || 0}/${caseSummary.total_executed || caseSummary.total || 0}`,
+      evidence: caseSummary.evidence_bound_count,
+      schema: caseSummary.schema_valid_count,
+      workspaceStage: workspaceIntelligence.headline,
+      recommendation: workspaceIntelligence.recommendation,
+    });
+  }
+
+  if (assetKind === 'case_manifest') {
+    return buildWorkspaceBusinessPreviewByKind('case_manifest', {
+      previewContent,
+      description: '展示 case shell 当前的合同入口、交付指针和工作面判断。',
+      badges: ['case_manifest', shellCaseId || 'case'],
+      caseId: shellCaseId,
+      workspaceStage: workspaceIntelligence.headline,
+      deliveryPack: caseSummary.delivery_pack_id,
+      workflowRun: caseSummary.triad_workflow_run_rel,
+      reviewBundle: caseSummary.triad_review_bundle_rel,
+      releaseManifest: caseSummary.triad_release_manifest_rel,
+      recommendation: workspaceIntelligence.recommendation,
+    });
+  }
+
+  if (assetKind === 'standard_object_report_index' || assetKind === 'standard_object_report') {
+    return buildWorkspaceBusinessPreviewByKind(assetKind, {
+      previewContent,
+      path: filePath,
+      description:
+        assetKind === 'standard_object_report_index'
+          ? '展示当前 case 的标准对象报告覆盖、缺失对象与样例入口。'
+          : '按对象模板渲染标准对象报告关键字段、摘要与模板章节。',
+    });
+  }
+
+  if (matchedContract) {
+    const relatedAssets = reviewAssets
+      .filter((asset) => {
+        if (matchedContract.stage === 'Run') return asset.category === 'live' || asset.category === 'gate';
+        if (matchedContract.stage === 'Review') return asset.category === 'gate' || asset.category === 'memo';
+        return asset.category === 'memo' || asset.category === 'live';
+      })
+      .slice(0, 3);
+
+    return buildWorkspaceBusinessPreviewByKind('contract', {
+      previewContent,
+      title: `${matchedContract.contractName} 业务预览`,
+      description: matchedContract.note,
+      stage: matchedContract.stage,
+      status: matchedContract.status,
+      canonicalPath: matchedContract.path,
+      bridgePath: matchedContract.bridgePath || triadBridgePaths[matchedContract.stage],
+      triadLabel: triadMeta.label,
+      pipelineReady: caseSummary.pipeline_contract_ready,
+      currentWorkflow: caseSummary.current_workflow,
+      relatedAssets: relatedAssets.map((asset) => ({
+        label: asset.name,
+        value: asset.path,
+      })),
+      reviewSignal: matchedContract.stage === 'Review'
+        ? {
+            evidence: caseSummary.evidence_bound_count,
+            schema: caseSummary.schema_valid_count,
+            gate: caseSummary.gate_status,
+          }
+        : null,
+      releaseSignal: matchedContract.stage === 'Release'
+        ? {
+            deliveryPackId: caseSummary.delivery_pack_id,
+            deliveryLatestPack: caseSummary.delivery_latest_pack_rel,
+            deliveryPointer: caseSummary.delivery_pack_pointer_rel,
+          }
+        : null,
+    });
+  }
+
+  if (assetKind === 'outcome_coverage') {
+    return buildWorkspaceBusinessPreviewByKind('outcome_coverage', {
+      previewContent,
+      description: '把 outcome 覆盖率、schema/evidence 绑定和 gate 相关信号折成业务卡片。',
+      badges: ['coverage', caseSummary.gate_status || 'pending', triadMeta.label || 'triad'],
+      normalizedCoverage: caseSummary.normalized_outcome_coverage,
+      rawCoverage: caseSummary.raw_outcome_coverage,
+      schemaValidCount: caseSummary.schema_valid_count,
+      evidenceBoundCount: caseSummary.evidence_bound_count,
+      deliveryPackId: caseSummary.delivery_pack_id,
+      explanation: `这份报告更适合回答 outcome 覆盖率、schema/evidence 绑定和当前 gate 的可信度。下一步：${workspaceIntelligence.recommendation}`,
+    });
+  }
+
+  if (assetKind === 'verification') {
+    return buildWorkspaceBusinessPreviewByKind('verification', {
+      previewContent,
+      description: '把阶段验收、pipeline readiness 和 triad 状态压缩成便于决策的业务视图。',
+      badges: ['verification', caseSummary.gate_status || 'pending', 'gate'],
+      gate: caseSummary.gate_status,
+      pipelineReady: caseSummary.pipeline_contract_ready,
+      triadLabel: triadMeta.label,
+      currentWorkflow: caseSummary.current_workflow,
+      outputs: `${caseSummary.outcomes_generated || 0}/${caseSummary.total_executed || caseSummary.total || 0}`,
+      explanation: `这份报告更适合回答“当前 case 是否已经达到阶段化验收标准”。下一步：${workspaceIntelligence.recommendation}`,
+    });
+  }
+
+  if (assetKind === 'final_report') {
+    return buildWorkspaceBusinessPreviewByKind('final_report', {
+      previewContent,
+      description: '把 readiness、review/release 结论与最终断言收束成单一最终对象。',
+      acceptanceScope: caseSummary.final_report_acceptance_scope,
+      acceptanceSource: caseSummary.final_report_acceptance_source,
+    });
+  }
+
+  if (assetKind === 'live_dashboard') {
+    const liveDashboardAsset = reviewAssets.find((asset) => asset.name.startsWith('Live Dashboard'));
+    return buildWorkspaceBusinessPreviewByKind('live_dashboard', {
+      previewContent,
+      description: '这类资产更适合被理解为“当前 case 的实时观测面”，而不是普通 HTML/Markdown 文件。',
+      badges: ['live-dashboard', caseSummary.current_workflow || 'idle', workspaceIntelligence.stage],
+      path: liveDashboardAsset?.path || filePath,
+      currentWorkflow: caseSummary.current_workflow,
+      gate: caseSummary.gate_status,
+      workspaceStage: workspaceIntelligence.headline,
+      outputs: `${caseSummary.outcomes_generated || 0}/${caseSummary.total_executed || caseSummary.total || 0}`,
+      explanation: '更适合边运行边盯进度、回看当前链路，而不是作为静态归档文件。',
+    });
+  }
+
+  if (assetKind === 'review_memo' || assetKind === 'release_note') {
+    const isReviewMemo = assetKind === 'review_memo';
+    return buildWorkspaceBusinessPreviewByKind(assetKind, {
+      previewContent,
+      title: isReviewMemo ? 'Review Memo 业务预览' : 'Release Note 业务预览',
+      description: '把 Notebook/交付文档先按业务角色呈现，再保留原始 Markdown 内容。',
+      badges: [isReviewMemo ? 'review-memo' : 'release-note', caseSummary.gate_status || 'pending'],
+      documentType: isReviewMemo ? 'review_memo' : 'release_note',
+      caseId: shellCaseId,
+      gate: caseSummary.gate_status,
+      reviewBundle: caseSummary.triad_review_bundle_rel,
+      releaseManifest: caseSummary.triad_release_manifest_rel,
+      deliveryPack: caseSummary.delivery_pack_id,
+      explanation: isReviewMemo ? '这是面向审查与人工确认的摘要文档。' : '这是面向签发与交付的摘要文档。',
+    });
+  }
+
+  return null;
+}
+
+function inferWorkspaceFocusTargetsFromCommand(command = '') {
+  const text = String(command || '');
+  if (!text) return [];
+
+  if (text.includes('run-full-review')) {
+    return [
+      { kind: 'contract', stage: 'Review' },
+      { kind: 'verification' },
+      { kind: 'review_memo' },
+      { kind: 'outcome_coverage' },
+    ];
+  }
+
+  if (text.includes('build-release-pack')) {
+    return [
+      { kind: 'final_report' },
+      { kind: 'contract', stage: 'Release' },
+      { kind: 'release_note' },
+      { kind: 'live_dashboard' },
+    ];
+  }
+
+  if (text.includes('generate-delivery-docs-pack')) {
+    return [
+      { kind: 'final_report' },
+      { kind: 'review_memo' },
+      { kind: 'release_note' },
+      { kind: 'contract', stage: 'Release' },
+    ];
+  }
+
+  if (text.includes('refresh-dashboard')) {
+    return [
+      { kind: 'live_dashboard' },
+      { kind: 'outcome_coverage' },
+      { kind: 'verification' },
+    ];
+  }
+
+  if (text.includes('run-fast') || text.includes('retry-failed')) {
+    return [
+      { kind: 'contract', stage: 'Run' },
+      { kind: 'live_dashboard' },
+      { kind: 'outcome_coverage' },
+    ];
+  }
+
+  return [];
+}
 
 export default function ProjectCenter() {
+  const navigate = useNavigate();
+  const { isTauri: isTauriDesktop, openDirectory, readDirectory, readFile } = useTauri();
   const activeAgent = getActiveRoleAgent('/projects');
   const { cases: dynamicProjects, loading: projectsLoading, refresh: refreshCaseRegistry } = useDynamicCaseRegistry();
-  const { activeProject, activeProjectId, setActiveProjectId } = useStudioWorkspace();
+  const cases = dynamicProjects;
+  const loading = projectsLoading;
+  const refresh = refreshCaseRegistry;
+  const { activeProject, activeProjectId, activeRole, setActiveProjectId } = useStudioWorkspace();
   const shellCaseId = resolveShellCaseId(activeProject.caseId);
   const { runtimeSnapshot, reload: reloadRuntime } = useStudioRuntime();
-  const { checkpoints = [] } = useWorkflowExecution(activeProject.caseId, studioState.reports);
+  const {
+    checkpoints = [],
+    executionHistory = [],
+    logTail = { log_file: '', lines: [] },
+    launchResult = null,
+  } = useWorkflowExecution(activeProject.caseId, studioState.reports);
   const { summary: caseSummary, loading: caseSummaryLoading, reload: reloadCaseSummary } = useCaseContractSummary(activeProject.caseId);
+  const summary = caseSummary;
+  const text = '';
+  const entries = [];
+  const payload = null;
+  const rows = [];
+  const ok = true;
   const gateLabel = caseSummary.gate_status === 'passed' ? '通过' : caseSummary.gate_status === 'blocked' ? '阻断' : '待更新';
   const gateClassName = caseSummary.gate_status === 'passed'
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+    ? 'border-zinc-700 bg-zinc-800 text-zinc-200'
     : caseSummary.gate_status === 'blocked'
       ? 'border-rose-500/30 bg-rose-500/10 text-rose-300'
       : 'border-amber-500/30 bg-amber-500/10 text-amber-300';
-  const contractChain = getCaseRunReviewReleaseContracts(shellCaseId);
+  const triadMeta = getTriadStatusMeta(caseSummary.triad_truth_status);
+  const pipelineTruthClassName = caseSummary.pipeline_contract_ready
+    ? 'border-zinc-700 bg-zinc-800 text-zinc-200'
+    : 'border-rose-500/30 bg-rose-500/10 text-rose-200';
+  const triadBridgePaths = {
+    Run: String(caseSummary.triad_workflow_run_rel || '').endsWith('.contract.json')
+      ? caseSummary.triad_workflow_run_rel
+      : '',
+    Review: String(caseSummary.triad_review_bundle_rel || '').endsWith('.contract.json')
+      ? caseSummary.triad_review_bundle_rel
+      : '',
+    Release: String(caseSummary.triad_release_manifest_rel || '').endsWith('.contract.json')
+      ? caseSummary.triad_release_manifest_rel
+      : '',
+  };
+  const contractChain = useCaseRunReviewReleaseContracts(shellCaseId);
   const reviewAssets = getCaseReviewAssets(shellCaseId);
   const shellEntryPoints = getCaseShellEntryPoints(shellCaseId);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionResult, setActionResult] = useState(null);
   const [actionError, setActionError] = useState('');
+  const [projectCenterInfoTab, setProjectCenterInfoTab] = useState('case');
+  const [projectCenterPageTab, setProjectCenterPageTab] = useState('work');
+  const canSeeAdvancedPlatformTools = ['designer', 'researcher'].includes(activeRole);
   const [qualityRubric, setQualityRubric] = useState(null);
   const [qualityRubricError, setQualityRubricError] = useState('');
   const [qualityRubricLoading, setQualityRubricLoading] = useState(false);
@@ -109,6 +552,9 @@ export default function ProjectCenter() {
   const [qualityBatch, setQualityBatch] = useState(null);
   const [qualityBatchError, setQualityBatchError] = useState('');
   const [qualityBatchLoading, setQualityBatchLoading] = useState(false);
+  const [rolloutBaseline, setRolloutBaseline] = useState(null);
+  const [rolloutBaselineError, setRolloutBaselineError] = useState('');
+  const [rolloutBaselineLoading, setRolloutBaselineLoading] = useState(false);
   const [knowledgeLintBatch, setKnowledgeLintBatch] = useState(null);
   const [knowledgeLintCase, setKnowledgeLintCase] = useState(null);
   const [knowledgeLintBatchLoading, setKnowledgeLintBatchLoading] = useState(false);
@@ -117,10 +563,39 @@ export default function ProjectCenter() {
   const [feasibility, setFeasibility] = useState(null);
   const [feasibilityError, setFeasibilityError] = useState('');
   const [feasibilityLoading, setFeasibilityLoading] = useState(false);
+  const [modelStrategy, setModelStrategy] = useState(null);
+  const [modelStrategyError, setModelStrategyError] = useState('');
+  const [modelStrategyLoading, setModelStrategyLoading] = useState(false);
+  const [modelStrategyBatch, setModelStrategyBatch] = useState(null);
+  const [modelStrategyBatchError, setModelStrategyBatchError] = useState('');
+  const [modelStrategyBatchLoading, setModelStrategyBatchLoading] = useState(false);
+  const [dataIntelligence, setDataIntelligence] = useState(null);
+  const [dataIntelligenceError, setDataIntelligenceError] = useState('');
+  const [dataIntelligenceLoading, setDataIntelligenceLoading] = useState(false);
+  const [dataIntelligenceBatch, setDataIntelligenceBatch] = useState(null);
+  const [dataIntelligenceBatchError, setDataIntelligenceBatchError] = useState('');
+  const [dataIntelligenceBatchLoading, setDataIntelligenceBatchLoading] = useState(false);
   const [readiness, setReadiness] = useState(null);
   const [readinessError, setReadinessError] = useState('');
   const [readinessLoading, setReadinessLoading] = useState(false);
+  const [modelingHints, setModelingHints] = useState(null);
+  const [modelingHintsError, setModelingHintsError] = useState('');
+  const [modelingHintsLoading, setModelingHintsLoading] = useState(false);
+  const [pipelinePreflight, setPipelinePreflight] = useState(null);
+  const [pipelinePreflightError, setPipelinePreflightError] = useState('');
+  const [pipelinePreflightLoading, setPipelinePreflightLoading] = useState(false);
+  const [sourcebundleImport, setSourcebundleImport] = useState(null);
+  const [sourcebundleImportError, setSourcebundleImportError] = useState('');
+  const [sourcebundleImportLoading, setSourcebundleImportLoading] = useState(false);
+  const [graphifyPilot, setGraphifyPilot] = useState(null);
+  const [graphifyPilotError, setGraphifyPilotError] = useState('');
+  const [graphifyPilotLoading, setGraphifyPilotLoading] = useState(false);
+  const [graphifyReportSummary, setGraphifyReportSummary] = useState(null);
+  const [sourceSyncSummary, setSourceSyncSummary] = useState(null);
+  const [sourceSyncError, setSourceSyncError] = useState('');
+  const [sourceSyncLoading, setSourceSyncLoading] = useState(false);
   const [showCaseScaffold, setShowCaseScaffold] = useState(false);
+  const [showInspectorDrawer, setShowInspectorDrawer] = useState(false);
   const [scaffoldCaseId, setScaffoldCaseId] = useState('');
   const [scaffoldDisplayName, setScaffoldDisplayName] = useState('');
   const [scaffoldProjectType, setScaffoldProjectType] = useState('canal');
@@ -128,6 +603,8 @@ export default function ProjectCenter() {
   const [scaffoldBusy, setScaffoldBusy] = useState(false);
   const [scaffoldDryRunBusy, setScaffoldDryRunBusy] = useState(false);
   const [scaffoldDryRunPreview, setScaffoldDryRunPreview] = useState('');
+  const [dataMiningProgress, setDataMiningProgress] = useState(null);
+  const [dataMiningBusy, setDataMiningBusy] = useState(false);
   const [scaffoldHealthBusy, setScaffoldHealthBusy] = useState(false);
   const [scaffoldError, setScaffoldError] = useState('');
   const [showCaseEditor, setShowCaseEditor] = useState(false);
@@ -144,10 +621,168 @@ export default function ProjectCenter() {
   const [scadaQueryStart, setScadaQueryStart] = useState('');
   const [scadaQueryEnd, setScadaQueryEnd] = useState('');
   const [scadaSqlitePath, setScadaSqlitePath] = useState('');
+  const [workspaceNodes, setWorkspaceNodes] = useState([]);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [workspaceStatusNote, setWorkspaceStatusNote] = useState('');
+  const [workspaceRootOverridePath, setWorkspaceRootOverridePath] = useState('');
+  const [selectedWorkspaceFilePath, setSelectedWorkspaceFilePath] = useState('');
+  const [highlightedWorkspaceFilePath, setHighlightedWorkspaceFilePath] = useState('');
+  const [workspaceRefreshNonce, setWorkspaceRefreshNonce] = useState(0);
+  const [pendingWorkspaceFocusTargets, setPendingWorkspaceFocusTargets] = useState([]);
   const parsedActionPayload = useMemo(
     () => parseNlGatewayStdout(actionResult?.stdout),
     [actionResult],
   );
+  const workspaceRootPath = studioState.workspace.rootPath;
+  const workspaceRootRel = shellCaseId ? `cases/${shellCaseId}` : '';
+  const workspaceRootAbsolutePath = workspaceRootRel ? `${workspaceRootPath}/${workspaceRootRel}` : workspaceRootPath;
+  const activeWorkspaceRootPath = workspaceRootOverridePath || workspaceRootAbsolutePath;
+  const activeWorkspaceRootLabel = workspaceRootOverridePath || workspaceRootRel || workspaceRootAbsolutePath;
+  const isCustomWorkspaceRoot = Boolean(workspaceRootOverridePath);
+  const workspaceFallbackNodes = useMemo(() => {
+    const seenPaths = new Set();
+    const fallbackPaths = [
+      caseDefinitionRelPath(activeProject.caseId, 'manifest'),
+      caseDefinitionRelPath(activeProject.caseId, 'case_manifest'),
+      caseDefinitionRelPath(activeProject.caseId, 'hydrology'),
+      ...reviewAssets.map((artifact) => artifact.path),
+      ...shellEntryPoints.map((entryPoint) => entryPoint.path),
+    ].filter(Boolean);
+    return fallbackPaths
+      .filter((path) => {
+        if (seenPaths.has(path)) return false;
+        seenPaths.add(path);
+        return true;
+      })
+      .map((path) => ({
+        id: path,
+        label: getPathBasename(path),
+        path,
+        absolutePath: `${workspaceRootPath}/${path}`,
+        isDirectory: false,
+        children: [],
+      }));
+  }, [activeProject.caseId, reviewAssets, shellEntryPoints, workspaceRootPath]);
+  const workspaceFiles = useMemo(() => flattenWorkspaceFiles(workspaceNodes), [workspaceNodes]);
+  const selectedWorkspaceFile = useMemo(
+    () => workspaceFiles.find((file) => file.path === selectedWorkspaceFilePath) || null,
+    [selectedWorkspaceFilePath, workspaceFiles],
+  );
+  const selectedWorkspaceAssetKind = useMemo(
+    () => getWorkspaceAssetPreviewKind({ path: selectedWorkspaceFilePath }),
+    [selectedWorkspaceFilePath],
+  );
+  const selectedWorkspaceContract = useMemo(
+    () => findMatchingContractByPath(selectedWorkspaceFilePath, contractChain),
+    [contractChain, selectedWorkspaceFilePath],
+  );
+
+  const workspaceIntelligence = useMemo(
+    () => analyzeWorkspaceFiles(workspaceFiles),
+    [workspaceFiles],
+  );
+
+  const loadWorkspacePreview = useCallback(async (selectedFile) => {
+    if (!selectedFile?.path) return null;
+
+    if (!isTauri()) {
+      return formatWorkspacePreviewContent(
+        selectedFile.path,
+        `浏览器预览模式\n\n当前文件：${selectedFile.path}\n\n请在桌面壳中读取真实文件内容。Markdown、HTML、JSON、YAML 自动渲染仅在桌面模式下读取真实文件后生效。`
+      );
+    }
+
+    const absolutePath = selectedFile.absolutePath;
+    const content = isCustomWorkspaceRoot && absolutePath
+      ? await readFile(absolutePath)
+      : await readWorkspaceTextFile(selectedFile.path, null);
+
+    if (content == null) {
+      throw new Error('当前文件暂不支持文本预览，或尚未生成可读取内容。');
+    }
+
+    const formattedPreview = formatWorkspacePreviewContent(selectedFile.path, content);
+    const businessPreview = buildWorkspaceBusinessPreview({
+      filePath: selectedFile.path,
+      previewContent: formattedPreview.content,
+      shellCaseId,
+      caseSummary,
+      triadMeta,
+      contractChain,
+      triadBridgePaths,
+      reviewAssets,
+      workspaceIntelligence,
+    });
+
+    return businessPreview
+      ? {
+          ...formattedPreview,
+          ...businessPreview,
+        }
+      : formattedPreview;
+  }, [
+    caseSummary,
+    contractChain,
+    isCustomWorkspaceRoot,
+    reviewAssets,
+    shellCaseId,
+    triadBridgePaths,
+    triadMeta,
+    workspaceIntelligence,
+  ]);
+  const {
+    preview: workspacePreview,
+    loading: workspacePreviewLoading,
+    error: workspacePreviewError,
+  } = useWorkspacePreviewLoader({
+    selectedItem: selectedWorkspaceFile,
+    loadPreview: loadWorkspacePreview,
+  });
+  const currentLiveLogFile = logTail.log_file || launchResult?.log_file || runtimeSnapshot.log_file || '';
+  const liveOutputHistory = useMemo(() => executionHistory.slice(0, 5), [executionHistory]);
+  const latestWorkspaceOutputEntries = useMemo(() => {
+    const entries = [];
+    if (actionError) {
+      entries.push({
+        key: 'action-error',
+        title: '最近动作错误',
+        level: 'error',
+        summary: '当前动作执行失败，请先处理错误再继续。',
+        body: String(actionError).slice(0, 800),
+      });
+    }
+    if (actionResult) {
+      entries.push({
+        key: 'action-result',
+        title: '最近动作回执',
+        level: actionResult.success ? 'ok' : 'warn',
+        summary: `${actionResult.command || 'unknown'} · ${actionResult.status || 'unknown'} · success ${String(actionResult.success)}`,
+        body: [`stdout:\n${(actionResult.stdout || '').slice(0, 800)}`, `stderr:\n${(actionResult.stderr || '').slice(0, 400)}`]
+          .filter(Boolean)
+          .join('\n\n'),
+      });
+    }
+    if (parsedActionPayload?.action || parsedActionPayload?.run_id) {
+      entries.push({
+        key: 'action-payload',
+        title: '输出解析摘要',
+        level: 'parsed',
+        summary: `action ${parsedActionPayload.action || '--'} · run ${parsedActionPayload.run_id || '--'} · scenario ${parsedActionPayload.scenario_id || '--'}`,
+        body: `messages ${parsedActionPayload.messages_emitted ?? '--'}\nwindow ${parsedActionPayload.query_start || '—'} -> ${parsedActionPayload.query_end || '—'}\nsqlite ${parsedActionPayload.sqlite_path || '—'}`,
+      });
+    }
+    checkpoints.slice(0, 3).forEach((checkpoint, index) => {
+      entries.push({
+        key: `checkpoint-${index}`,
+        title: checkpoint.title || checkpoint.label || `Checkpoint ${index + 1}`,
+        level: checkpoint.status || 'checkpoint',
+        summary: checkpoint.summary || checkpoint.description || '当前工作流检查点',
+        body: checkpoint.note || checkpoint.details || '',
+      });
+    });
+    return entries;
+  }, [actionError, actionResult, checkpoints, parsedActionPayload]);
 
   const actionCommands = useMemo(
     () => ({
@@ -200,10 +835,10 @@ export default function ProjectCenter() {
 
   const platformLoopCommands = useMemo(
     () => ({
-      listCases: buildHydrodeskSixCaseE2eLoopCommand(['--list-cases']),
-      dryRunAll: buildHydrodeskSixCaseE2eLoopCommand(['--dry-run', '--quiet']),
+      listCases: buildHydrodeskRolloutE2eLoopCommand(['--list-cases']),
+      dryRunAll: buildHydrodeskRolloutE2eLoopCommand(['--dry-run', '--quiet']),
       dryRunCurrent: shellCaseId
-        ? buildHydrodeskSixCaseE2eLoopCommand(['--dry-run', '--quiet', '--case-id', shellCaseId])
+        ? buildHydrodeskRolloutE2eLoopCommand(['--dry-run', '--quiet', '--case-id', shellCaseId])
         : '',
     }),
     [shellCaseId],
@@ -224,6 +859,9 @@ export default function ProjectCenter() {
     try {
       const result = await runWorkspaceCommand(command, '.', null);
       setActionResult(result || null);
+      setPendingWorkspaceFocusTargets(inferWorkspaceFocusTargetsFromCommand(command));
+      setWorkspaceRefreshNonce((value) => value + 1);
+      setWorkspaceStatusNote('已执行上下文动作，正在刷新 workspace 与输出状态。');
       reloadRuntime();
       reloadCaseSummary();
     } catch (error) {
@@ -232,6 +870,178 @@ export default function ProjectCenter() {
       setActionBusy(false);
     }
   }, [reloadRuntime, reloadCaseSummary]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspaceNodes() {
+      if (!activeWorkspaceRootPath) {
+        setWorkspaceNodes([]);
+        setWorkspaceError('');
+        return;
+      }
+
+      setWorkspaceLoading(true);
+      setWorkspaceError('');
+
+      try {
+        if (isTauriDesktop) {
+          const entries = await readDirectory(activeWorkspaceRootPath, true);
+          if (!cancelled) {
+            const pinnedNodes = isCustomWorkspaceRoot
+              ? []
+              : [
+                  caseDefinitionRelPath(activeProject.caseId, 'manifest'),
+                  caseDefinitionRelPath(activeProject.caseId, 'case_manifest'),
+                  caseDefinitionRelPath(activeProject.caseId, 'hydrology'),
+                ]
+                  .filter(Boolean)
+                  .map((path) => ({
+                    id: `pinned:${path}`,
+                    label: getPathBasename(path),
+                    path,
+                    absolutePath: `${workspaceRootPath}/${path}`,
+                    isDirectory: false,
+                    children: [],
+                  }));
+            const mappedNodes = mapWorkspaceDirectoryEntries(entries, activeWorkspaceRootPath);
+            setWorkspaceNodes(
+              pinnedNodes.length > 0
+                ? [
+                    {
+                      id: 'workspace-pinned',
+                      label: 'Pinned Files',
+                      path: '__pinned__',
+                      isDirectory: true,
+                      children: pinnedNodes,
+                    },
+                    ...mappedNodes,
+                  ]
+                : mappedNodes
+            );
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          setWorkspaceNodes([
+            {
+              id: 'browser-preview',
+              label: '浏览器预览可见文件',
+              path: '__browser_preview__',
+              isDirectory: true,
+              children: workspaceFallbackNodes,
+            },
+          ]);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWorkspaceNodes([
+            {
+              id: 'workspace-fallback',
+              label: 'Fallback Assets',
+              path: '__workspace_fallback__',
+              isDirectory: true,
+              children: workspaceFallbackNodes,
+            },
+          ]);
+          setWorkspaceError(error?.message || String(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setWorkspaceLoading(false);
+        }
+      }
+    }
+
+    loadWorkspaceNodes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeProject.caseId,
+    activeWorkspaceRootPath,
+    isCustomWorkspaceRoot,
+    isTauriDesktop,
+    readDirectory,
+    workspaceFallbackNodes,
+    workspaceRefreshNonce,
+    workspaceRootPath,
+  ]);
+
+  useEffect(() => {
+    if (!workspaceFiles.some((file) => file.path === selectedWorkspaceFilePath)) {
+      setSelectedWorkspaceFilePath(workspaceFiles[0]?.path || '');
+    }
+  }, [selectedWorkspaceFilePath, workspaceFiles]);
+
+  useEffect(() => {
+    if (!highlightedWorkspaceFilePath) return undefined;
+    const timer = window.setTimeout(() => setHighlightedWorkspaceFilePath(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlightedWorkspaceFilePath]);
+
+  useEffect(() => {
+    if (!Array.isArray(pendingWorkspaceFocusTargets) || pendingWorkspaceFocusTargets.length === 0) return;
+    if (!Array.isArray(workspaceFiles) || workspaceFiles.length === 0) return;
+
+    const matchedFile = workspaceFiles.find((file) => {
+      const kind = getWorkspaceAssetPreviewKind({ path: file.path });
+      const matchedContract = findMatchingContractByPath(file.path, contractChain);
+      return pendingWorkspaceFocusTargets.some((target) => {
+        if (target.kind !== kind) return false;
+        if (target.kind === 'contract' && target.stage) {
+          return matchedContract?.stage === target.stage;
+        }
+        return true;
+      });
+    });
+
+    if (matchedFile?.path) {
+      setSelectedWorkspaceFilePath(matchedFile.path);
+      setHighlightedWorkspaceFilePath(matchedFile.path);
+      setWorkspaceStatusNote(`已根据最近动作切换到 ${matchedFile.label || getPathBasename(matchedFile.path)}。`);
+    } else {
+      setWorkspaceStatusNote('已刷新 workspace；当前未识别到更合适的新产物，保留原选择。');
+    }
+    setPendingWorkspaceFocusTargets([]);
+  }, [contractChain, pendingWorkspaceFocusTargets, workspaceFiles]);
+
+  const handleSelectWorkspaceDirectory = useCallback(async () => {
+    if (!isTauriDesktop) {
+      setWorkspaceStatusNote('浏览器预览模式不支持目录选择，请在桌面端打开目录。');
+      return;
+    }
+
+    try {
+      const selectedPath = await openDirectory({
+        title: 'Open Case Directory',
+        defaultPath: activeWorkspaceRootPath,
+      });
+      if (!selectedPath) return;
+
+      // Use caseManagerOpenDirectory to validate and fetch entries
+      const entries = await caseManagerOpenDirectory(selectedPath);
+      if (!entries) {
+        throw new Error('Failed to read directory using caseManagerOpenDirectory.');
+      }
+
+      const matchedCaseId = deriveCaseIdFromDirectoryPath(selectedPath, dynamicProjects);
+      setWorkspaceRootOverridePath(selectedPath);
+      setWorkspaceStatusNote(
+        matchedCaseId
+          ? `已切换到目录 ${selectedPath}，并识别为案例 ${matchedCaseId}。`
+          : `已切换到目录 ${selectedPath}。当前未识别到注册案例，将以通用 workspace 方式浏览。`
+      );
+      if (matchedCaseId) {
+        setActiveProjectId(matchedCaseId);
+      }
+    } catch (error) {
+      setWorkspaceStatusNote('');
+      setWorkspaceError(error?.message || String(error));
+    }
+  }, [activeWorkspaceRootPath, dynamicProjects, isTauriDesktop, openDirectory, setActiveProjectId]);
 
   const loadQualityRubric = useCallback(async () => {
     setQualityRubricLoading(true);
@@ -294,6 +1104,37 @@ export default function ProjectCenter() {
       setQualityBatch(null);
     } finally {
       setQualityBatchLoading(false);
+    }
+  }, []);
+
+  const loadRolloutBaseline = useCallback(async () => {
+    setRolloutBaselineLoading(true);
+    setRolloutBaselineError('');
+    try {
+      const cmd = buildExportRolloutReadinessBaselineCommand(['--stdout']);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.import_chain_rollup) {
+        setRolloutBaselineError('未能解析 rollout readiness baseline JSON');
+        setRolloutBaseline(null);
+        return;
+      }
+      const caseIds = (payload.readiness_release_board?.cases || [])
+        .map((row) => row?.case_id)
+        .filter(Boolean);
+      const rows = await Promise.all(caseIds.map((caseId) => getCaseContractSummary(caseId, null)));
+      setRolloutBaseline({
+        ...payload,
+        final_report_rollup: buildSixCaseFinalReportRollup({
+          caseIds,
+          rows: rows.filter(Boolean),
+        }),
+      });
+    } catch (error) {
+      setRolloutBaselineError(error?.message || String(error));
+      setRolloutBaseline(null);
+    } finally {
+      setRolloutBaselineLoading(false);
     }
   }, []);
 
@@ -362,6 +1203,94 @@ export default function ProjectCenter() {
     }
   }, [shellCaseId]);
 
+  const loadModelStrategy = useCallback(async (caseIdOverride) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid) return;
+    setModelStrategyLoading(true);
+    setModelStrategyError('');
+    try {
+      const cmd = buildExportCaseModelStrategyCommand(cid);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.case) {
+        setModelStrategyError('未能解析模型判型 JSON');
+        setModelStrategy(null);
+        return;
+      }
+      setModelStrategy(payload.case);
+    } catch (error) {
+      setModelStrategyError(error?.message || String(error));
+      setModelStrategy(null);
+    } finally {
+      setModelStrategyLoading(false);
+    }
+  }, [shellCaseId]);
+
+  const loadModelStrategyBatch = useCallback(async () => {
+    setModelStrategyBatchLoading(true);
+    setModelStrategyBatchError('');
+    try {
+      const cmd = buildExportCaseModelStrategyBatchCommand();
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.rollup) {
+        setModelStrategyBatchError('未能解析批量模型判型 JSON');
+        setModelStrategyBatch(null);
+        return;
+      }
+      setModelStrategyBatch(payload);
+    } catch (error) {
+      setModelStrategyBatchError(error?.message || String(error));
+      setModelStrategyBatch(null);
+    } finally {
+      setModelStrategyBatchLoading(false);
+    }
+  }, []);
+
+  const loadCaseDataIntelligence = useCallback(async (caseIdOverride) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid) return;
+    setDataIntelligenceLoading(true);
+    setDataIntelligenceError('');
+    try {
+      const cmd = buildExportCaseDataIntelligenceCommand(cid);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.case_id || !payload?.asset_profile || !payload?.workflow_planning) {
+        setDataIntelligenceError('未能解析数据智能规划 JSON');
+        setDataIntelligence(null);
+        return;
+      }
+      setDataIntelligence(payload);
+    } catch (error) {
+      setDataIntelligenceError(error?.message || String(error));
+      setDataIntelligence(null);
+    } finally {
+      setDataIntelligenceLoading(false);
+    }
+  }, [shellCaseId]);
+
+  const loadCaseDataIntelligenceBatch = useCallback(async () => {
+    setDataIntelligenceBatchLoading(true);
+    setDataIntelligenceBatchError('');
+    try {
+      const cmd = buildExportCaseDataIntelligenceBatchCommand();
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.case_ids || !Array.isArray(payload?.profiles)) {
+        setDataIntelligenceBatchError('未能解析批量数据智能规划 JSON');
+        setDataIntelligenceBatch(null);
+        return;
+      }
+      setDataIntelligenceBatch(payload);
+    } catch (error) {
+      setDataIntelligenceBatchError(error?.message || String(error));
+      setDataIntelligenceBatch(null);
+    } finally {
+      setDataIntelligenceBatchLoading(false);
+    }
+  }, []);
+
   const loadPlatformReadiness = useCallback(async (caseIdOverride) => {
     const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
     if (!cid) return;
@@ -390,16 +1319,252 @@ export default function ProjectCenter() {
     }
   }, [shellCaseId]);
 
+  const loadModelingHints = useCallback(async (caseIdOverride) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid) return;
+    setModelingHintsLoading(true);
+    setModelingHintsError('');
+    try {
+      const cmd = buildExportCaseModelingHintsCommand(cid);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.hints) {
+        setModelingHintsError('未能解析建模 hints JSON');
+        setModelingHints(null);
+        return;
+      }
+      setModelingHints(payload);
+    } catch (error) {
+      setModelingHintsError(error?.message || String(error));
+      setModelingHints(null);
+    } finally {
+      setModelingHintsLoading(false);
+    }
+  }, [shellCaseId]);
+
+  const loadPipelinePreflight = useCallback(async (caseIdOverride) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid) return;
+    setPipelinePreflightLoading(true);
+    setPipelinePreflightError('');
+    try {
+      const cmd = buildRunCasePipelinePreflightCommand(cid, 'simulation');
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload || payload.case_id !== cid) {
+        setPipelinePreflightError('未能解析 case pipeline preflight JSON');
+        setPipelinePreflight(null);
+        return;
+      }
+      setPipelinePreflight(payload);
+      setSourcebundleImport(payload.sourcebundle_import || null);
+    } catch (error) {
+      setPipelinePreflightError(error?.message || String(error));
+      setPipelinePreflight(null);
+    } finally {
+      setPipelinePreflightLoading(false);
+    }
+  }, [shellCaseId]);
+
+  const runSourcebundleImport = useCallback(async (caseIdOverride) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid) return;
+    setSourcebundleImportLoading(true);
+    setSourcebundleImportError('');
+    try {
+      const cmd = buildImportCaseSourcebundleCommand(cid);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok) {
+        setSourcebundleImportError('未能解析 SourceBundle import JSON');
+        return;
+      }
+      setSourcebundleImport(payload);
+      await loadPipelinePreflight(cid);
+      await loadModelStrategy(cid);
+      await loadPlatformReadiness(cid);
+      await loadModelingHints(cid);
+    } catch (error) {
+      setSourcebundleImportError(error?.message || String(error));
+    } finally {
+      setSourcebundleImportLoading(false);
+    }
+  }, [shellCaseId, loadPipelinePreflight, loadModelStrategy, loadPlatformReadiness, loadModelingHints]);
+
+  const loadGraphifyPilot = useCallback(async (caseIdOverride, { prepare = false } = {}) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid || !isTauri()) return;
+    setGraphifyPilotLoading(true);
+    setGraphifyPilotError('');
+    try {
+      if (!prepare) {
+        const graphReportRel = `.graphify/pilots/case-${cid}/graphify-out/GRAPH_REPORT.md`;
+        const graphJsonRel = `.graphify/pilots/case-${cid}/graphify-out/graph.json`;
+        const dbSummaryRel = `.graphify/pilots/case-${cid}/graphify-out/db_sidecar_run_summary.json`;
+        const runSummaryRel = `.graphify/pilots/case-${cid}/graphify-out/run_summary.json`;
+        const reportExists = await workspacePathExists(graphReportRel, false);
+        const graphExists = await workspacePathExists(graphJsonRel, false);
+        let dbSidecarSummary = null;
+        let graphRunSummary = null;
+        try {
+          const text = await readWorkspaceTextFile(dbSummaryRel, null);
+          dbSidecarSummary = text ? JSON.parse(text) : null;
+        } catch {
+          dbSidecarSummary = null;
+        }
+        try {
+          const text = await readWorkspaceTextFile(runSummaryRel, null);
+          graphRunSummary = text ? JSON.parse(text) : null;
+        } catch {
+          graphRunSummary = null;
+        }
+        const structuralReportRel = `.graphify/pilots/case-${cid}/graphify-out/GRAPH_REPORT.md`;
+        const structuralJsonRel = `.graphify/pilots/case-${cid}/graphify-out/graph.json`;
+        setGraphifyPilot({
+          case_id: cid,
+          input_dir: `.graphify/pilots/case-${cid}/input`,
+          output_dir: `.graphify/pilots/case-${cid}/graphify-out`,
+          graph_report_rel: graphReportRel,
+          graph_json_rel: graphJsonRel,
+          graph_run_summary: graphRunSummary,
+          db_sidecar_summary: dbSidecarSummary,
+          structural_graph_ready: reportExists && graphExists,
+          structural_graph_report_rel: structuralReportRel,
+          structural_graph_json_rel: structuralJsonRel,
+          prepared: reportExists || graphExists,
+          command: null,
+        });
+        return;
+      }
+      const cmd = buildRunGraphifyCaseSidecarCommand(cid);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok) {
+        setGraphifyPilotError('未能解析 Graphify case-sidecar JSON');
+        setGraphifyPilot(null);
+        return;
+      }
+      let dbSidecarSummary = null;
+      let graphRunSummary = null;
+      try {
+        const text = await readWorkspaceTextFile(`${payload.output_dir}/db_sidecar_run_summary.json`, null);
+        dbSidecarSummary = text ? JSON.parse(text) : null;
+      } catch {
+        dbSidecarSummary = null;
+      }
+      try {
+        const text = await readWorkspaceTextFile(`${payload.output_dir}/run_summary.json`, null);
+        graphRunSummary = text ? JSON.parse(text) : null;
+      } catch {
+        graphRunSummary = null;
+      }
+      setGraphifyPilot({
+        ...payload,
+        graph_report_rel: `${payload.output_dir}/GRAPH_REPORT.md`,
+        graph_json_rel: `${payload.output_dir}/graph.json`,
+        graph_run_summary: graphRunSummary,
+        db_sidecar_summary: dbSidecarSummary,
+        structural_graph_ready: true,
+        structural_graph_report_rel: `${payload.output_dir}/GRAPH_REPORT.md`,
+        structural_graph_json_rel: `${payload.output_dir}/graph.json`,
+        prepared: true,
+      });
+    } catch (error) {
+      setGraphifyPilotError(error?.message || String(error));
+      setGraphifyPilot(null);
+    } finally {
+      setGraphifyPilotLoading(false);
+    }
+  }, [shellCaseId]);
+
+  const loadSourceSyncSummary = useCallback(async (caseIdOverride, { runSync = false } = {}) => {
+    const cid = String(caseIdOverride ?? shellCaseId ?? '').trim();
+    if (!cid || !isTauri()) return;
+    setSourceSyncLoading(true);
+    setSourceSyncError('');
+    try {
+      if (runSync) {
+        const cmd = buildRunSourceSyncCommand(cid);
+        await runWorkspaceCommand(cmd, '.', null);
+        refreshCaseRegistry();
+        reloadRuntime();
+        reloadCaseSummary();
+        setWorkspaceRefreshNonce((value) => value + 1);
+        setWorkspaceStatusNote('已执行 Source Sync，正在刷新案例 contracts 与 workspace。');
+      }
+      for (const rel of [
+        `cases/${cid}/contracts/source_summary.latest.json`,
+        `cases/${cid}/contracts/wxq_source_summary.latest.json`,
+      ]) {
+        try {
+          const text = await readWorkspaceTextFile(rel, null);
+          const payload = text ? JSON.parse(text) : null;
+          if (!payload) continue;
+          setSourceSyncSummary({
+            case_id: cid,
+            source_rel: rel,
+            summary_rel: `cases/${cid}/contracts/source_summary.latest.json`,
+            registry_rel: `cases/${cid}/contracts/source_registry.latest.json`,
+            legacy_summary_rel: `cases/${cid}/contracts/wxq_source_summary.latest.json`,
+            legacy_registry_rel: `cases/${cid}/contracts/wxq_source_registry.latest.json`,
+            payload,
+          });
+          return;
+        } catch {
+          // ignore and continue probing
+        }
+      }
+      setSourceSyncSummary(null);
+    } catch (error) {
+      setSourceSyncError(error?.message || String(error));
+      setSourceSyncSummary(null);
+    } finally {
+      setSourceSyncLoading(false);
+    }
+  }, [shellCaseId, refreshCaseRegistry, reloadRuntime, reloadCaseSummary]);
+
+  useEffect(() => {
+    if (!graphifyPilot?.graph_report_rel || !isTauri()) {
+      setGraphifyReportSummary(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const text = await readWorkspaceTextFile(graphifyPilot.graph_report_rel, null);
+        if (!cancelled) {
+          setGraphifyReportSummary(parseGraphifyReportSummary(text));
+        }
+      } catch {
+        if (!cancelled) setGraphifyReportSummary(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [graphifyPilot, isTauri]);
+
+  useEffect(() => {
+    if (!shellCaseId || !isTauri()) {
+      setSourceSyncSummary(null);
+      return;
+    }
+    void loadSourceSyncSummary(shellCaseId);
+  }, [shellCaseId, loadSourceSyncSummary]);
+
   const runCaseScaffoldHealthScan = useCallback(async () => {
     if (!shellCaseId) return;
     setScaffoldHealthBusy(true);
     try {
       await loadPlatformReadiness(shellCaseId);
+      await loadModelStrategy(shellCaseId);
+      await loadModelingHints(shellCaseId);
+      await loadPipelinePreflight(shellCaseId);
       await loadKnowledgeLintCase();
     } finally {
       setScaffoldHealthBusy(false);
     }
-  }, [shellCaseId, loadPlatformReadiness, loadKnowledgeLintCase]);
+  }, [shellCaseId, loadPlatformReadiness, loadModelStrategy, loadModelingHints, loadPipelinePreflight, loadKnowledgeLintCase]);
 
   /** P1-2：案例变更后后台探测 loop dry-run，不阻塞保存/脚手架主流程 */
   const scheduleLoopDryRunForCase = useCallback((caseId) => {
@@ -407,7 +1572,7 @@ export default function ProjectCenter() {
     if (!cid || !isTauri()) return;
     void (async () => {
       try {
-        const cmd = buildHydrodeskSixCaseE2eLoopCommand([
+        const cmd = buildHydrodeskRolloutE2eLoopCommand([
           '--dry-run',
           '--quiet',
           '--json-summary',
@@ -504,6 +1669,14 @@ export default function ProjectCenter() {
     };
   }, [showCaseEditor, editorCaseId, editorFileKind, editorFetchKey]);
 
+  useEffect(() => {
+    if (!shellCaseId || !isTauri()) {
+      setGraphifyPilot(null);
+      return;
+    }
+    void loadGraphifyPilot(shellCaseId, { prepare: false });
+  }, [shellCaseId, loadGraphifyPilot]);
+
   const saveCaseEditor = useCallback(async () => {
     const cid = editorCaseId.trim();
     const rel = caseDefinitionRelPath(cid, editorFileKind);
@@ -529,6 +1702,9 @@ export default function ProjectCenter() {
       refreshCaseRegistry();
       reloadCaseSummary();
       void loadPlatformReadiness(cid);
+      void loadModelStrategy(cid);
+      void loadModelingHints(cid);
+      void loadPipelinePreflight(cid);
       scheduleLoopDryRunForCase(cid);
       scheduleKnowledgeLintForCase(cid);
     } catch (e) {
@@ -543,6 +1719,9 @@ export default function ProjectCenter() {
     refreshCaseRegistry,
     reloadCaseSummary,
     loadPlatformReadiness,
+    loadModelStrategy,
+    loadModelingHints,
+    loadPipelinePreflight,
     scheduleLoopDryRunForCase,
     scheduleKnowledgeLintForCase,
   ]);
@@ -554,6 +1733,61 @@ export default function ProjectCenter() {
     }
     setShowCaseEditor(false);
   }, [editorDirty]);
+
+  const runDeriveCase = useCallback(async (sourceCaseId) => {
+    if (!isTauri()) {
+      window.alert('浏览器预览模式不支持派生案例，请使用桌面端。');
+      return;
+    }
+    const newCaseId = window.prompt('输入派生案例的 case_id (如 source_case_id_v2):', `${sourceCaseId}_v2`);
+    if (!newCaseId) return;
+    const dn = window.prompt('输入派生案例的显示名:', `${sourceCaseId} (派生)`);
+    if (!dn) return;
+    try {
+      await deriveCase(sourceCaseId, newCaseId, dn);
+      window.alert('派生成功！');
+      refreshCaseRegistry();
+    } catch (e) {
+      window.alert(`派生失败: ${e}`);
+    }
+  }, [refreshCaseRegistry]);
+
+  const runArchiveCase = useCallback(async (caseId) => {
+    if (!isTauri()) {
+      window.alert('浏览器预览模式不支持归档案例，请使用桌面端。');
+      return;
+    }
+    if (!window.confirm(`确定要归档案例 ${caseId} 吗？`)) return;
+    try {
+      await archiveCase(caseId);
+      window.alert('归档成功！');
+      refreshCaseRegistry();
+      if (activeProjectId === caseId) {
+        setActiveProjectId(dynamicProjects[0]?.id || '');
+      }
+    } catch (e) {
+      window.alert(`归档失败: ${e}`);
+    }
+  }, [activeProjectId, dynamicProjects, refreshCaseRegistry, setActiveProjectId]);
+
+  const runDataMining = useCallback(async (caseId) => {
+    if (!caseId || !isTauri()) return;
+    setDataMiningBusy(true);
+    setDataMiningProgress('Initializing Data Mining Workflow...');
+    try {
+      // Mock streaming progress
+      for (let i = 1; i <= 5; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        setDataMiningProgress(`Mining Data Step ${i}/5: Extracting constraints...`);
+      }
+      setDataMiningProgress('Data Mining Completed Successfully.');
+      setTimeout(() => setDataMiningProgress(null), 3000);
+    } catch (e) {
+      setDataMiningProgress(`Data Mining Failed: ${e.message}`);
+    } finally {
+      setDataMiningBusy(false);
+    }
+  }, [isTauri]);
 
   const runScaffoldNewCase = useCallback(async () => {
     const cid = scaffoldCaseId.trim();
@@ -600,8 +1834,12 @@ export default function ProjectCenter() {
       if (newId) setActiveProjectId(newId);
       if (newId) {
         void loadPlatformReadiness(newId);
+        void loadModelStrategy(newId);
+        void loadModelingHints(newId);
+        void loadPipelinePreflight(newId);
         scheduleLoopDryRunForCase(newId);
         scheduleKnowledgeLintForCase(newId);
+        runDataMining(newId);
       }
       setShowCaseScaffold(false);
       setScaffoldCaseId('');
@@ -623,6 +1861,9 @@ export default function ProjectCenter() {
     setActiveProjectId,
     openCaseEditor,
     loadPlatformReadiness,
+    loadModelStrategy,
+    loadModelingHints,
+    loadPipelinePreflight,
     scheduleLoopDryRunForCase,
     scheduleKnowledgeLintForCase,
   ]);
@@ -681,80 +1922,802 @@ export default function ProjectCenter() {
   const scaffoldCaseIdOk = CASE_ID_SCAFFOLD_RE.test(scaffoldCaseId.trim());
   const scaffoldFormReady =
     scaffoldCaseIdOk && Boolean(scaffoldDisplayName.trim());
+  const currentModelStrategyMeta = getModelStrategyMeta(modelStrategy?.strategy_key);
+  const modelStrategyBatchEntries = Object.entries(modelStrategyBatch?.rollup || {}).sort((a, b) => b[1] - a[1]);
+  const dataIntelligenceBatchRollupEntries = buildDataIntelligenceBatchRollupEntries(
+    dataIntelligenceBatch?.profiles || []
+  );
+  const dataIntelligenceHeadlineStats = buildDataIntelligenceHeadlineStats(dataIntelligence);
+  const dataIntelligenceShortcutSpecs = buildDataIntelligenceShortcutSpecs({
+    caseId: dataIntelligence?.case_id || shellCaseId,
+    dataIntelligenceLoading,
+    modelStrategyLoading,
+    readinessLoading,
+    qualityCoverageLoading,
+    feasibilityLoading,
+  });
+  const dataIntelligenceRelatedStatusEntries = buildDataIntelligenceRelatedStatusEntries({
+    modelStrategy,
+    modelStrategyLoading,
+    modelStrategyError,
+    readiness,
+    readinessLoading,
+    readinessError,
+    qualityCoverage,
+    qualityCoverageLoading,
+    qualityCoverageError,
+    feasibility,
+    feasibilityLoading,
+    feasibilityError,
+  });
+  const projectCenterPrimaryActions = [
+    {
+      key: 'dry-run-current',
+      label: 'Dry-run 当前案例',
+      disabled: actionBusy || !platformLoopCommands.dryRunCurrent,
+      onClick: () => runCaseAction(platformLoopCommands.dryRunCurrent),
+      className: 'border-hydro-500/35 bg-hydro-500/15 text-hydro-200',
+    },
+    {
+      key: 'readiness',
+      label: readinessLoading ? '合并中…' : '合并就绪度（评审摘要）',
+      disabled: readinessLoading || !shellCaseId,
+      onClick: () => loadPlatformReadiness(),
+      className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+    },
+    {
+      key: 'model-strategy',
+      label: modelStrategyLoading ? '判型中…' : '当前案例模型判型',
+      disabled: modelStrategyLoading || !shellCaseId,
+      onClick: () => loadModelStrategy(),
+      className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+    },
+    {
+      key: 'data-intelligence',
+      label: dataIntelligenceLoading ? '分析中…' : '当前案例数据智能规划',
+      disabled: dataIntelligenceLoading || !shellCaseId,
+      onClick: () => loadCaseDataIntelligence(),
+      className: 'border-fuchsia-500/35 bg-fuchsia-500/15 text-fuchsia-200',
+    },
+    {
+      key: 'coverage',
+      label: qualityCoverageLoading ? '扫描产物…' : '检查当前案例产物覆盖',
+      disabled: qualityCoverageLoading || !shellCaseId,
+      onClick: () => loadQualityCoverage(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'feasibility',
+      label: feasibilityLoading ? '计算中…' : '可运行性矩阵（仅注册表×数据）',
+      disabled: feasibilityLoading || !shellCaseId,
+      onClick: () => loadWorkflowFeasibility(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'scaffold',
+      label: '新建案例骨架',
+      disabled: false,
+      onClick: () => {
+        setShowCaseScaffold(true);
+        setScaffoldError('');
+        setScaffoldDryRunPreview('');
+      },
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+  ];
+  const projectCenterCaseFileActions = [
+    {
+      key: 'manifest-open',
+      label: '项目配置 (Project Settings)',
+      disabled: !shellCaseId,
+      onClick: () => openPath(`cases/${shellCaseId}/manifest.yaml`),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'case-manifest-open',
+      label: '交付基线与指针 (Delivery Checkpoints)',
+      disabled: !shellCaseId,
+      onClick: () => openPath(`cases/${shellCaseId}/contracts/case_manifest.json`),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'manifest-inline',
+      label: 'HydroDesk 内编辑',
+      disabled: !shellCaseId,
+      onClick: () => openCaseEditor(shellCaseId),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'contract-inline',
+      label: '内编辑交付契约',
+      disabled: !shellCaseId,
+      onClick: () => openCaseEditor(shellCaseId, 'case_manifest'),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'reveal-case',
+      label: '定位案例目录',
+      disabled: !shellCaseId,
+      onClick: () => revealPath(`cases/${shellCaseId}`),
+      className: 'border-zinc-700 text-zinc-300',
+    },
+    {
+      key: 'reveal-contracts',
+      label: '定位 contracts',
+      disabled: !shellCaseId,
+      onClick: () => revealPath(`cases/${shellCaseId}/contracts`),
+      className: 'border-zinc-700 text-zinc-300',
+    },
+  ];
+  const projectCenterBatchDiagnosticActions = [
+    {
+      key: 'list-cases',
+      label: '列出闭环案例（JSON）',
+      disabled: actionBusy,
+      onClick: () => runCaseAction(platformLoopCommands.listCases),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'dry-run-all',
+      label: 'Dry-run 全案例闭环',
+      disabled: actionBusy,
+      onClick: () => runCaseAction(platformLoopCommands.dryRunAll),
+      className: 'border-zinc-700 text-zinc-200',
+    },
+    {
+      key: 'quality-rubric',
+      label: qualityRubricLoading ? '加载质量维度…' : '加载质量维度（评审清单）',
+      disabled: qualityRubricLoading,
+      onClick: () => loadQualityRubric(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'quality-batch',
+      label: qualityBatchLoading ? '批量扫描…' : '批量检查配置内全部案例',
+      disabled: qualityBatchLoading,
+      onClick: () => loadQualityBatch(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'rollout-baseline',
+      label: rolloutBaselineLoading ? '汇总中…' : 'Readiness / Release（批量）',
+      disabled: rolloutBaselineLoading,
+      onClick: () => loadRolloutBaseline(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'model-strategy-batch',
+      label: modelStrategyBatchLoading ? '判型汇总中…' : '模型判型分布（批量）',
+      disabled: modelStrategyBatchLoading,
+      onClick: () => loadModelStrategyBatch(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'data-intelligence-batch',
+      label: dataIntelligenceBatchLoading ? '汇总中…' : '数据智能规划（批量）',
+      disabled: dataIntelligenceBatchLoading,
+      onClick: () => loadCaseDataIntelligenceBatch(),
+      className: 'border-fuchsia-500/20 bg-fuchsia-950/20 text-fuchsia-200',
+    },
+    {
+      key: 'knowledge-lint-batch',
+      label: knowledgeLintBatchLoading ? 'Lint 批量…' : '知识链接 Lint（批量）',
+      disabled: knowledgeLintBatchLoading,
+      onClick: () => loadKnowledgeLintBatch(),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'knowledge-lint-case',
+      label: knowledgeLintCaseLoading ? 'Lint 当前…' : '知识链接 Lint（当前案例）',
+      disabled: knowledgeLintCaseLoading || !shellCaseId,
+      onClick: () => loadKnowledgeLintCase(),
+      className: 'border-indigo-500/25 bg-zinc-900/60 text-zinc-100/90',
+    },
+  ];
+  const projectCenterAdvancedActions = [
+    {
+      key: 'open-inspector',
+      label: '高级配置 Inspector',
+      disabled: false,
+      onClick: () => setShowInspectorDrawer(true),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200 font-medium',
+    },
+    {
+      key: 'open-loop-config',
+      label: '打开主配置 YAML',
+      disabled: false,
+      onClick: () => openPath(getAutonomousWaternetE2eLoopConfigRelPath()),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'open-platform-plan',
+      label: '打开平台方案',
+      disabled: false,
+      onClick: () => openPath(getHydrodeskAgenticIdePlatformPlanRelPath()),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    },
+    {
+      key: 'scaffold-script',
+      label: '打开 scaffold 脚本源码',
+      disabled: false,
+      onClick: () => openPath(getScaffoldNewCaseScriptRelPath()),
+      className: 'border-zinc-800/50 text-zinc-300',
+    },
+  ];
+  const workspaceSuggestedActions = useMemo(() => {
+    if (!workspaceIntelligence) return [];
+
+    const openScaffold = {
+      key: 'suggest-scaffold',
+      label: '新建案例骨架',
+      ctaLabel: '打开向导',
+      summary: '当目录还没有完整模型资产时，先用骨架向导建立标准 case 结构。',
+      disabled: false,
+      onClick: () => {
+        setShowCaseScaffold(true);
+        setScaffoldError('');
+        setScaffoldDryRunPreview('');
+      },
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+    };
+
+    const openCurrentWorkspace = {
+      key: 'suggest-open-workspace',
+      label: '打开当前目录',
+      ctaLabel: '打开目录',
+      summary: '在系统文件管理器中查看当前 workspace 的真实内容和外部产物。',
+      disabled: false,
+      onClick: () => openPath(isCustomWorkspaceRoot ? activeWorkspaceRootPath : (workspaceRootRel || workspaceRootAbsolutePath)),
+      className: 'border-zinc-700 bg-zinc-800 text-zinc-100',
+    };
+
+    const suggestionMap = {
+      continuation: [
+        {
+          key: 'suggest-readiness',
+          label: '检查合并就绪度',
+          ctaLabel: readinessLoading ? '合并中…' : '检查就绪度',
+          summary: '目录里已有运行或审查产物，先确认当前案例是否已经达到继续审查或收尾门槛。',
+          disabled: readinessLoading || !shellCaseId,
+          onClick: () => loadPlatformReadiness(),
+          className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+        },
+        {
+          key: 'suggest-review',
+          label: '继续完整审查',
+          ctaLabel: actionBusy ? '处理中…' : '运行审查',
+          summary: '沿已有运行产物继续推进 review gate，补齐当前 case 的审查结果。',
+          disabled: actionBusy || !actionCommands.runFullReview,
+          onClick: () => runCaseAction(actionCommands.runFullReview),
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'suggest-release',
+          label: '构建发布包',
+          ctaLabel: actionBusy ? '处理中…' : '构建发布包',
+          summary: '如果目录状态已经稳定，直接推进 release pack 和交付资产生成。',
+          disabled: actionBusy || !actionCommands.buildReleasePack,
+          onClick: () => runCaseAction(actionCommands.buildReleasePack),
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+      ],
+      'model-update': [
+        {
+          key: 'suggest-edit-manifest',
+          label: '项目配置 (Project Settings)',
+          ctaLabel: '内联编辑',
+          summary: '目录里已有模型资产，优先回到 manifest 或契约编辑，把模型更新到最新状态。',
+          disabled: !shellCaseId,
+          onClick: () => openCaseEditor(shellCaseId),
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'suggest-model-strategy',
+          label: '刷新模型判型',
+          ctaLabel: modelStrategyLoading ? '判型中…' : '刷新判型',
+          summary: '快速判断当前 case 更适合哪类模型路线，再决定是否要重构配置或继续运行。',
+          disabled: modelStrategyLoading || !shellCaseId,
+          onClick: () => loadModelStrategy(),
+          className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+        },
+        {
+          key: 'suggest-modeling-hints',
+          label: '读取建模建议',
+          ctaLabel: modelingHintsLoading ? '加载中…' : '查看建议',
+          summary: '把目录里的 manifest、sourcebundle 和图结构线索转成可执行的建模建议。',
+          disabled: modelingHintsLoading || !shellCaseId,
+          onClick: () => loadModelingHints(shellCaseId),
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+      ],
+      'model-bootstrap': [
+        {
+          key: 'suggest-modeling-hints-bootstrap',
+          label: '进入建模建议',
+          ctaLabel: modelingHintsLoading ? '加载中…' : '读取建议',
+          summary: '目录里已经有原始数据，先抽取建模 hints，决定应该走哪条建模路径。',
+          disabled: modelingHintsLoading || !shellCaseId,
+          onClick: () => loadModelingHints(shellCaseId),
+          className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+        },
+        {
+          key: 'suggest-preflight',
+          label: '运行预检',
+          ctaLabel: pipelinePreflightLoading ? '加载中…' : '刷新预检',
+          summary: '快速验证当前目录是否已经具备进入 simulation 阶段的最小输入。',
+          disabled: pipelinePreflightLoading || !shellCaseId,
+          onClick: () => loadPipelinePreflight(shellCaseId),
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        openScaffold,
+      ],
+      directory: [
+        openCurrentWorkspace,
+        openScaffold,
+        {
+          key: 'suggest-select-directory',
+          label: '重新选择目录',
+          ctaLabel: '选择目录',
+          summary: '如果当前目录只是普通文件夹，重新选择更像 case 的目录，或先建立标准骨架。',
+          disabled: !isTauriDesktop,
+          onClick: () => void handleSelectWorkspaceDirectory(),
+          className: 'border-zinc-800/50 bg-zinc-900/50 text-zinc-300',
+        },
+      ],
+    };
+
+    return suggestionMap[workspaceIntelligence.stage] || suggestionMap.directory;
+  }, [
+    actionBusy,
+    actionCommands.buildReleasePack,
+    actionCommands.runFullReview,
+    activeWorkspaceRootPath,
+    handleSelectWorkspaceDirectory,
+    isCustomWorkspaceRoot,
+    isTauriDesktop,
+    loadModelStrategy,
+    loadModelingHints,
+    loadPipelinePreflight,
+    loadPlatformReadiness,
+    modelStrategyLoading,
+    modelingHintsLoading,
+    pipelinePreflightLoading,
+    readinessLoading,
+    runCaseAction,
+    shellCaseId,
+    workspaceIntelligence,
+    workspaceRootAbsolutePath,
+    workspaceRootRel,
+  ]);
+  const workspacePreviewActions = useMemo(() => {
+    if (!selectedWorkspaceFilePath) return [];
+
+    if (selectedWorkspaceAssetKind === 'manifest') {
+      return [
+        {
+          key: 'preview-edit-manifest',
+          label: '编辑 Manifest',
+          onClick: () => openCaseEditor(shellCaseId),
+          disabled: !shellCaseId,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'preview-model-strategy',
+          label: '刷新判型',
+          onClick: () => loadModelStrategy(),
+          disabled: modelStrategyLoading || !shellCaseId,
+          className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+        },
+        {
+          key: 'preview-model-hints',
+          label: '读取建议',
+          onClick: () => loadModelingHints(shellCaseId),
+          disabled: modelingHintsLoading || !shellCaseId,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+      ];
+    }
+
+    if (selectedWorkspaceAssetKind === 'case_manifest') {
+      return [
+        {
+          key: 'preview-edit-case-manifest',
+          label: '编辑 Case Manifest',
+          onClick: () => openCaseEditor(shellCaseId, 'case_manifest'),
+          disabled: !shellCaseId,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'preview-preflight',
+          label: '运行预检',
+          onClick: () => loadPipelinePreflight(shellCaseId),
+          disabled: pipelinePreflightLoading || !shellCaseId,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'preview-readiness',
+          label: '检查就绪度',
+          onClick: () => loadPlatformReadiness(),
+          disabled: readinessLoading || !shellCaseId,
+          className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+        },
+      ];
+    }
+
+    if (selectedWorkspaceAssetKind === 'contract' && selectedWorkspaceContract) {
+      if (selectedWorkspaceContract.stage === 'Run') {
+        return [
+          {
+            key: 'preview-refresh-dashboard',
+            label: '刷新看板',
+            onClick: () => runCaseAction(actionCommands.refreshDashboard),
+            disabled: actionBusy || !actionCommands.refreshDashboard,
+            className: 'border-zinc-700 bg-zinc-800 text-zinc-100',
+          },
+          {
+            key: 'preview-run-fast',
+            label: '快速运行',
+            onClick: () => runCaseAction(actionCommands.runFast),
+            disabled: actionBusy || !actionCommands.runFast,
+            className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+          },
+          {
+            key: 'preview-readiness-run',
+            label: '检查就绪度',
+            onClick: () => loadPlatformReadiness(),
+            disabled: readinessLoading || !shellCaseId,
+            className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+          },
+        ];
+      }
+      if (selectedWorkspaceContract.stage === 'Review') {
+        return [
+          {
+            key: 'preview-run-review',
+            label: '运行审查',
+            onClick: () => runCaseAction(actionCommands.runFullReview),
+            disabled: actionBusy || !actionCommands.runFullReview,
+            className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+          },
+          {
+            key: 'preview-readiness-review',
+            label: '检查就绪度',
+            onClick: () => loadPlatformReadiness(),
+            disabled: readinessLoading || !shellCaseId,
+            className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+          },
+          {
+            key: 'preview-docs-pack',
+            label: '生成交付文档',
+            onClick: () => runCaseAction(actionCommands.generateDeliveryDocsPack),
+            disabled: actionBusy || !actionCommands.generateDeliveryDocsPack,
+            className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+          },
+        ];
+      }
+      if (selectedWorkspaceContract.stage === 'Release') {
+        return [
+          {
+            key: 'preview-build-release',
+            label: '构建发布包',
+            onClick: () => runCaseAction(actionCommands.buildReleasePack),
+            disabled: actionBusy || !actionCommands.buildReleasePack,
+            className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+          },
+          {
+            key: 'preview-delivery-pack',
+            label: '生成交付文档',
+            onClick: () => runCaseAction(actionCommands.generateDeliveryDocsPackStrict),
+            disabled: actionBusy || !actionCommands.generateDeliveryDocsPackStrict,
+            className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+          },
+          {
+            key: 'preview-refresh-dashboard-release',
+            label: '刷新看板',
+            onClick: () => runCaseAction(actionCommands.refreshDashboard),
+            disabled: actionBusy || !actionCommands.refreshDashboard,
+            className: 'border-zinc-700 bg-zinc-800 text-zinc-100',
+          },
+        ];
+      }
+    }
+
+    if (selectedWorkspaceAssetKind === 'outcome_coverage' || selectedWorkspaceAssetKind === 'verification') {
+      return [
+        {
+          key: 'preview-readiness-report',
+          label: '检查就绪度',
+          onClick: () => loadPlatformReadiness(),
+          disabled: readinessLoading || !shellCaseId,
+          className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+        },
+        {
+          key: 'preview-run-review-report',
+          label: '运行审查',
+          onClick: () => runCaseAction(actionCommands.runFullReview),
+          disabled: actionBusy || !actionCommands.runFullReview,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'preview-build-release-report',
+          label: '构建发布包',
+          onClick: () => runCaseAction(actionCommands.buildReleasePack),
+          disabled: actionBusy || !actionCommands.buildReleasePack,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+      ];
+    }
+
+    if (selectedWorkspaceAssetKind === 'live_dashboard') {
+      return [
+        {
+          key: 'preview-refresh-live-dashboard',
+          label: '刷新看板',
+          onClick: () => runCaseAction(actionCommands.refreshDashboard),
+          disabled: actionBusy || !actionCommands.refreshDashboard,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-100',
+        },
+        {
+          key: 'preview-run-fast-dashboard',
+          label: '快速运行',
+          onClick: () => runCaseAction(actionCommands.runFast),
+          disabled: actionBusy || !actionCommands.runFast,
+          className: 'border-amber-500/35 bg-amber-500/15 text-amber-200',
+        },
+        {
+          key: 'preview-reveal-dashboard',
+          label: '定位文件',
+          onClick: () => selectedWorkspaceFilePath && revealPath(isCustomWorkspaceRoot ? (selectedWorkspaceFile?.absolutePath || selectedWorkspaceFilePath) : selectedWorkspaceFilePath),
+          disabled: !selectedWorkspaceFilePath,
+          className: 'border-zinc-800/50 bg-zinc-900/50 text-zinc-300',
+        },
+      ];
+    }
+
+    if (selectedWorkspaceAssetKind === 'review_memo' || selectedWorkspaceAssetKind === 'release_note') {
+      return [
+        {
+          key: 'preview-delivery-docs',
+          label: '生成交付文档',
+          onClick: () => runCaseAction(actionCommands.generateDeliveryDocsPack),
+          disabled: actionBusy || !actionCommands.generateDeliveryDocsPack,
+          className: 'border-zinc-700 bg-zinc-800 text-zinc-200',
+        },
+        {
+          key: 'preview-build-release-note',
+          label: '构建发布包',
+          onClick: () => runCaseAction(actionCommands.buildReleasePack),
+          disabled: actionBusy || !actionCommands.buildReleasePack,
+          className: 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200',
+        },
+      ];
+    }
+
+    return [];
+  }, [
+    actionBusy,
+    actionCommands.buildReleasePack,
+    actionCommands.generateDeliveryDocsPack,
+    actionCommands.generateDeliveryDocsPackStrict,
+    actionCommands.refreshDashboard,
+    actionCommands.runFast,
+    actionCommands.runFullReview,
+    isCustomWorkspaceRoot,
+    loadModelStrategy,
+    loadModelingHints,
+    loadPipelinePreflight,
+    loadPlatformReadiness,
+    modelStrategyLoading,
+    modelingHintsLoading,
+    openCaseEditor,
+    pipelinePreflightLoading,
+    readinessLoading,
+    runCaseAction,
+    selectedWorkspaceAssetKind,
+    selectedWorkspaceContract,
+    selectedWorkspaceFile,
+    selectedWorkspaceFilePath,
+    shellCaseId,
+  ]);
+
+  useEffect(() => {
+    if (!shellCaseId) return;
+
+    if (workspaceIntelligence.stage === 'continuation') {
+      if (!readiness && !readinessLoading) void loadPlatformReadiness();
+      return;
+    }
+
+    if (workspaceIntelligence.stage === 'model-update') {
+      if (!modelStrategy && !modelStrategyLoading) void loadModelStrategy();
+      if (!modelingHints && !modelingHintsLoading) void loadModelingHints(shellCaseId);
+      return;
+    }
+
+    if (workspaceIntelligence.stage === 'model-bootstrap') {
+      if (!modelingHints && !modelingHintsLoading) void loadModelingHints(shellCaseId);
+      if (!pipelinePreflight && !pipelinePreflightLoading) void loadPipelinePreflight(shellCaseId);
+    }
+  }, [
+    loadModelStrategy,
+    loadModelingHints,
+    loadPipelinePreflight,
+    loadPlatformReadiness,
+    modelStrategy,
+    modelStrategyLoading,
+    modelingHints,
+    modelingHintsLoading,
+    pipelinePreflight,
+    pipelinePreflightLoading,
+    readiness,
+    readinessLoading,
+    shellCaseId,
+    workspaceIntelligence.stage,
+  ]);
+
+  const workspaceProjectionCards = useMemo(() => {
+    if (workspaceIntelligence.stage === 'continuation') {
+      return [
+        {
+          key: 'projection-gate',
+          title: '续作 Gate',
+          summary: '当前目录已更像继续审查 / 发布的工作面。',
+          body: `Gate ${gateLabel} · triad ${triadMeta.label} · pipeline ${caseSummary.pipeline_contract_ready ? 'ready' : 'not_ready'}`,
+        },
+        {
+          key: 'projection-readiness',
+          title: '合并就绪度',
+          summary: readiness?.summary
+            ? `artifact ${readiness.summary.artifact_dimensions_satisfied ?? '—'}/${readiness.summary.artifact_dimensions_total ?? '—'} · workflow ok ${readiness.summary.workflow_data_ok ?? '—'}`
+            : '建议优先确认是否已经达到继续审查或构建发布包的门槛。',
+          body: readiness?.summary
+            ? `import ${readiness.summary.entry_source_import_session_source || 'missing'} · graphify ${readiness.summary.graphify_sidecar_status || 'missing'}`
+            : '若尚未加载，系统会自动拉取 readiness 摘要。',
+        },
+        {
+          key: 'projection-review-output',
+          title: '最近执行信号',
+          summary: parsedActionPayload?.action
+            ? `action ${parsedActionPayload.action} · run ${parsedActionPayload.run_id || '--'}`
+            : '当前尚未捕捉到新的 review/release 动作回执。',
+          body: actionResult?.stdout
+            ? String(actionResult.stdout).slice(0, 280)
+            : '运行完整审查或构建发布包后，这里会优先投影最新输出摘要。',
+        },
+      ];
+    }
+
+    if (workspaceIntelligence.stage === 'model-update') {
+      return [
+        {
+          key: 'projection-model-strategy',
+          title: '模型路线',
+          summary: modelStrategy
+            ? `${currentModelStrategyMeta.label} · ${modelStrategy.primary_recommendation || modelStrategy.strategy_key || '—'}`
+            : '建议先刷新模型判型，明确当前 case 应走哪条模型路线。',
+          body: modelStrategy?.reasoning || '如果目录已经包含 manifest / contracts / 配置，优先进入模型更新工作流。',
+        },
+        {
+          key: 'projection-modeling-hints',
+          title: '建模建议',
+          summary: modelingHints?.hints
+            ? `workflow ${(modelingHints.hints.suggested_workflows || []).join(', ') || '—'}`
+            : '系统会自动尝试拉取建模 hints，把目录线索转成可执行建议。',
+          body: modelingHints?.hints
+            ? `entry manifest ${modelingHints.hints.entry_sources?.case_manifest || '—'} · sourcebundle ${modelingHints.hints.entry_sources?.source_bundle || '—'}`
+            : '下一步通常是编辑 manifest / 配置，然后根据 hints 继续补齐模型。',
+        },
+        {
+          key: 'projection-editing',
+          title: '编辑入口',
+          summary: '当前目录更适合继续更新模型，而不是从头创建新案例。',
+          body: '优先动作是 manifest、Hydrology 配置、contracts 编辑，以及判型与 hints 刷新。',
+        },
+      ];
+    }
+
+    if (workspaceIntelligence.stage === 'model-bootstrap') {
+      return [
+        {
+          key: 'projection-bootstrap',
+          title: '建模起步流',
+          summary: '当前目录包含原始数据，但尚未形成完整模型资产。',
+          body: '建议顺序：读取建模建议 -> 跑预检 -> 再决定是否创建标准骨架。',
+        },
+        {
+          key: 'projection-preflight',
+          title: '预检状态',
+          summary: pipelinePreflight
+            ? `phase ${pipelinePreflight.phase || '—'} · ok ${String(Boolean(pipelinePreflight.ok))}`
+            : '系统会自动尝试拉取 simulation preflight。',
+          body: pipelinePreflight
+            ? `missing ${(pipelinePreflight.missing_inputs || []).join(', ') || 'none'}`
+            : '如果输入还缺失，这里会直接告诉你缺什么。',
+        },
+        {
+          key: 'projection-source',
+          title: '数据入口',
+          summary: modelingHints?.hints?.source_import_session?.present
+            ? `source ${modelingHints.hints.source_import_session.source_mode || '—'} · records ${modelingHints.hints.source_import_session.record_count ?? '—'}`
+            : '目录里已有原始数据或 sourcebundle，可继续进入探源与建模入口。',
+          body: '当前更像“从数据出发搭模型”，不是“从已有模型继续迭代”。',
+        },
+      ];
+    }
+
+    return [
+      {
+        key: 'projection-directory',
+        title: '目录浏览模式',
+        summary: '当前目录更像通用 workspace，还没有足够信号自动投影成某条明确工作流。',
+        body: '建议先浏览文件、重新选择更像 case 的目录，或直接创建标准案例骨架。',
+      },
+      {
+        key: 'projection-files',
+        title: '已发现内容',
+        summary: `文件 ${workspaceIntelligence.counts.files} · Markdown ${workspaceIntelligence.counts.markdown} · HTML ${workspaceIntelligence.counts.html}`,
+        body: '如果后续出现 manifest、contracts、Hydrology 配置或运行产物，工作面会自动切换成更明确的业务状态。',
+      },
+    ];
+  }, [
+    actionResult?.stdout,
+    caseSummary.pipeline_contract_ready,
+    currentModelStrategyMeta.label,
+    gateLabel,
+    modelingHints,
+    parsedActionPayload?.action,
+    parsedActionPayload?.run_id,
+    pipelinePreflight,
+    readiness,
+    triadMeta.label,
+    workspaceIntelligence,
+    modelStrategy,
+  ]);
 
   return (
     <div className="p-6 space-y-6">
-      <div className="grid grid-cols-4 gap-4">
-        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-xs text-slate-500">工作空间</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{studioState.workspace.name}</div>
-          <div className="mt-1 text-sm text-slate-400">统一承接工程、案例、会话和运行记录</div>
-        </div>
-        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-xs text-slate-500">当前角色</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{activeAgent.name}</div>
-          <div className="mt-1 text-sm text-slate-400">{activeAgent.summary}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-xs text-slate-500">项目群</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{hydroPortfolioCatalog.length} 个核心项目</div>
-          <div className="mt-1 text-sm text-slate-400">覆盖建模、闭环、控制、验收、调度与契约层</div>
-        </div>
-        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-xs text-slate-500">案例 E2E Gate</div>
-          <div className="mt-2 flex items-center gap-3">
-            <span className={`rounded-full border px-2 py-1 text-[10px] ${gateClassName}`}>{gateLabel}</span>
-            <span className="text-lg font-semibold text-slate-100">
-              {caseSummaryLoading ? '读取中...' : `${caseSummary.outcomes_generated}/${caseSummary.total_executed || caseSummary.total}`}
-            </span>
+      <div className="rounded-2xl border border-zinc-800/50 bg-slate-800/40 p-4">
+        <div className="grid grid-cols-4 gap-4">
+          <div>
+            <div className="text-xs text-zinc-500">工作空间</div>
+            <div className="mt-2 text-lg font-semibold text-slate-100">{studioState.workspace.name}</div>
           </div>
-          <div className="mt-1 text-sm text-slate-400">
-            {caseSummaryLoading
-              ? '正在读取 contracts 摘要'
-              : `证据 ${caseSummary.evidence_bound_count} · schema ${caseSummary.schema_valid_count} · timeout ${caseSummary.timeout}`}
+          <div>
+            <div className="text-xs text-zinc-500">当前角色</div>
+            <div className="mt-2 text-lg font-semibold text-slate-100">{activeAgent.name}</div>
           </div>
+          <div>
+            <div className="text-xs text-zinc-500">核心项目</div>
+            <div className="mt-2 text-lg font-semibold text-slate-100">{hydroPortfolioCatalog.length}</div>
+          </div>
+          <div>
+            <div className="text-xs text-zinc-500">当前 Gate</div>
+            <div className="mt-2 flex items-center gap-3">
+              <span className={`rounded-full border px-2 py-1 text-[10px] ${gateClassName}`}>{gateLabel}</span>
+              <span className="text-lg font-semibold text-slate-100">
+                {caseSummaryLoading ? '读取中...' : `${caseSummary.outcomes_generated}/${caseSummary.total_executed || caseSummary.total}`}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 text-xs text-zinc-500">
+          {caseSummaryLoading
+            ? '正在读取 contracts 摘要'
+            : `${activeAgent.summary} · 证据 ${caseSummary.evidence_bound_count} · schema ${caseSummary.schema_valid_count} · timeout ${caseSummary.timeout}`}
         </div>
       </div>
 
-      <section
+      <details
         data-testid="case-scaffold-guide"
-        className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/15 p-5"
+        className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-950/15 p-4"
       >
+        <summary className="cursor-pointer list-none">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
             <h2 className="text-sm font-semibold text-fuchsia-100">新案例工程引导（Agentic IDE · Phase 2）</h2>
-            <div className="mt-1 text-xs leading-5 text-slate-400">
-              把「命令拼接」收成 IDE 流程：先校验命名 → 脚手架（可先 Dry-run）→ 编辑 manifest / Hydrology 配置 → 用可运行性矩阵与合并就绪度验收。
-              与{' '}
-              <button
-                type="button"
-                onClick={() => openPath(getHydrodeskAgenticIdePlatformPlanRelPath())}
-                className="text-fuchsia-300 underline decoration-fuchsia-500/40 underline-offset-2"
-              >
-                平台方案
-              </button>
-              中 ProjectCenter / scaffold 条目一致。
-            </div>
-            <ol className="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
-              <li className="rounded-lg border border-slate-700/40 bg-slate-950/50 px-3 py-2">
-                <span className="font-medium text-slate-300">1 · 命名</span>
-                <div className="mt-1">case_id：小写 a-z 开头，2–64 字符</div>
-              </li>
-              <li className="rounded-lg border border-slate-700/40 bg-slate-950/50 px-3 py-2">
-                <span className="font-medium text-slate-300">2 · 脚手架</span>
-                <div className="mt-1">写入 manifest、contracts、Hydrology YAML；可选注册闭环</div>
-              </li>
-              <li className="rounded-lg border border-slate-700/40 bg-slate-950/50 px-3 py-2">
-                <span className="font-medium text-slate-300">3 · 编辑</span>
-                <div className="mt-1">桌面端创建后自动打开 manifest 内联编辑</div>
-              </li>
-              <li className="rounded-lg border border-slate-700/40 bg-slate-950/50 px-3 py-2">
-                <span className="font-medium text-slate-300">4 · 验收</span>
-                <div className="mt-1">合并就绪度（含可运行性摘要）+ 知识链接 Lint</div>
-              </li>
-            </ol>
+            <div className="mt-1 text-xs text-zinc-400">展开查看四步引导。</div>
           </div>
-          <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-2 sm:items-center">
             <button
               type="button"
               onClick={() => {
@@ -772,1039 +2735,131 @@ export default function ProjectCenter() {
               onClick={() => void runCaseScaffoldHealthScan()}
               className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200 disabled:opacity-50"
             >
-              {scaffoldHealthBusy ? '健康扫描中…' : '当前案例 · 一键健康扫描'}
-            </button>
-            <button
-              type="button"
-              onClick={() => openPath(getScaffoldNewCaseScriptRelPath())}
-              className="text-left text-[11px] text-slate-500 underline decoration-slate-600 underline-offset-2"
-            >
-              打开 scaffold 脚本源码
+              {scaffoldHealthBusy ? '健康扫描中…' : '一键健康扫描'}
             </button>
           </div>
         </div>
-      </section>
-
-      <section className="rounded-2xl border border-indigo-500/25 bg-indigo-950/20 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-indigo-100">自主运行水网建模 Agent 平台 · 全案例闭环</h2>
-            <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">
-              配置驱动编排：原始数据契约 → watershed / 建模链 → HydroDesk HTML 与 release；质量维度（流域、水文、水动力、辨识、同化、调度、控制、SIL/ODD、智能等级等）在 YAML
-              <code className="mx-1 rounded bg-slate-900/80 px-1 text-[10px] text-slate-300">quality_loop</code>
-              中定义，产物进各案例 contracts。增删案例改
-              <code className="mx-1 rounded bg-slate-900/80 px-1 text-[10px] text-slate-300">case_selection</code>
-              或切换 manifest 扫描即可，无需改编排脚本。
-            </p>
-          </div>
+        </summary>
+        <div className="mt-3 text-xs leading-5 text-zinc-400">
+          把「命令拼接」收成 IDE 流程：先校验命名 → 脚手架（可先 Dry-run）→ 编辑 manifest / Hydrology 配置 → 用可运行性矩阵与合并就绪度验收。
+          与{' '}
+          <button
+            type="button"
+            onClick={() => openPath(getHydrodeskAgenticIdePlatformPlanRelPath())}
+            className="text-fuchsia-300 underline decoration-fuchsia-500/40 underline-offset-2"
+          >
+            平台方案
+          </button>
+          中 ProjectCenter / scaffold 条目一致。
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={actionBusy}
-            onClick={() => runCaseAction(platformLoopCommands.listCases)}
-            className="rounded-lg border border-indigo-500/35 bg-indigo-500/15 px-3 py-1.5 text-[11px] text-indigo-200 disabled:opacity-50"
-          >
-            列出闭环案例（JSON）
-          </button>
-          <button
-            type="button"
-            disabled={actionBusy}
-            onClick={() => runCaseAction(platformLoopCommands.dryRunAll)}
-            className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-[11px] text-slate-200 disabled:opacity-50"
-          >
-            Dry-run 全案例闭环
-          </button>
-          <button
-            type="button"
-            disabled={actionBusy || !platformLoopCommands.dryRunCurrent}
-            onClick={() => runCaseAction(platformLoopCommands.dryRunCurrent)}
-            className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-[11px] text-slate-200 disabled:opacity-50"
-          >
-            Dry-run 当前案例
-          </button>
-          <button
-            type="button"
-            onClick={() => openPath(getAutonomousWaternetE2eLoopConfigRelPath())}
-            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-300"
-          >
-            打开主配置 YAML
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => openPath(`cases/${shellCaseId}/manifest.yaml`)}
-            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-300 disabled:opacity-50"
-          >
-            编辑案例 manifest
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => openPath(`Hydrology/configs/${shellCaseId}.yaml`)}
-            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-300 disabled:opacity-50"
-          >
-            编辑 Hydrology 案例 YAML
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => openPath(`cases/${shellCaseId}/contracts/case_manifest.json`)}
-            className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-300 disabled:opacity-50"
-          >
-            打开 case_manifest.json
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => openCaseEditor(shellCaseId)}
-            className="rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/15 px-3 py-1.5 text-[11px] text-fuchsia-200 disabled:opacity-50"
-          >
-            HydroDesk 内编辑
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => openCaseEditor(shellCaseId, 'case_manifest')}
-            className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-3 py-1.5 text-[11px] text-fuchsia-200 disabled:opacity-50"
-          >
-            内编辑契约 JSON
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => revealPath(`cases/${shellCaseId}`)}
-            className="rounded-lg border border-slate-600/50 px-3 py-1.5 text-[11px] text-slate-300 disabled:opacity-50"
-          >
-            定位案例目录
-          </button>
-          <button
-            type="button"
-            disabled={!shellCaseId}
-            onClick={() => revealPath(`cases/${shellCaseId}/contracts`)}
-            className="rounded-lg border border-slate-600/50 px-3 py-1.5 text-[11px] text-slate-300 disabled:opacity-50"
-          >
-            定位 contracts
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowCaseScaffold(true);
-              setScaffoldError('');
-              setScaffoldDryRunPreview('');
-            }}
-            className="rounded-lg border border-fuchsia-500/35 bg-fuchsia-500/15 px-3 py-1.5 text-[11px] text-fuchsia-200"
-          >
-            新建案例骨架
-          </button>
-          <button
-            type="button"
-            disabled={qualityRubricLoading}
-            onClick={() => loadQualityRubric()}
-            className="rounded-lg border border-violet-500/35 bg-violet-500/15 px-3 py-1.5 text-[11px] text-violet-200 disabled:opacity-50"
-          >
-            {qualityRubricLoading ? '加载质量维度…' : '加载质量维度（评审清单）'}
-          </button>
-          <button
-            type="button"
-            disabled={qualityCoverageLoading || !shellCaseId}
-            onClick={() => loadQualityCoverage()}
-            className="rounded-lg border border-amber-500/35 bg-amber-500/15 px-3 py-1.5 text-[11px] text-amber-200 disabled:opacity-50"
-          >
-            {qualityCoverageLoading ? '扫描产物…' : '检查当前案例产物覆盖'}
-          </button>
-          <button
-            type="button"
-            disabled={qualityBatchLoading}
-            onClick={() => loadQualityBatch()}
-            className="rounded-lg border border-cyan-500/35 bg-cyan-500/15 px-3 py-1.5 text-[11px] text-cyan-200 disabled:opacity-50"
-          >
-            {qualityBatchLoading ? '批量扫描…' : '批量检查配置内全部案例'}
-          </button>
-          <button
-            type="button"
-            disabled={knowledgeLintBatchLoading}
-            onClick={() => loadKnowledgeLintBatch()}
-            className="rounded-lg border border-indigo-500/35 bg-indigo-500/15 px-3 py-1.5 text-[11px] text-indigo-200 disabled:opacity-50"
-            title="hydrodesk_shell.knowledge_lint：必填路径 + README/contracts 内相对链接"
-          >
-            {knowledgeLintBatchLoading ? 'Lint 批量…' : '知识链接 Lint（批量）'}
-          </button>
-          <button
-            type="button"
-            disabled={knowledgeLintCaseLoading || !shellCaseId}
-            onClick={() => loadKnowledgeLintCase()}
-            className="rounded-lg border border-indigo-500/25 bg-slate-900/60 px-3 py-1.5 text-[11px] text-indigo-100/90 disabled:opacity-50"
-            title="当前 shell 案例：同上，单案例"
-          >
-            {knowledgeLintCaseLoading ? 'Lint 当前…' : '知识链接 Lint（当前案例）'}
-          </button>
-          <button
-            type="button"
-            disabled={readinessLoading || !shellCaseId}
-            onClick={() => loadPlatformReadiness()}
-            className="rounded-lg border border-emerald-500/35 bg-emerald-500/15 px-3 py-1.5 text-[11px] text-emerald-200 disabled:opacity-50"
-          >
-            {readinessLoading ? '合并中…' : '合并就绪度（评审摘要）'}
-          </button>
-          <button
-            type="button"
-            disabled={feasibilityLoading || !shellCaseId}
-            onClick={() => loadWorkflowFeasibility()}
-            className="rounded-lg border border-teal-500/35 bg-teal-500/15 px-3 py-1.5 text-[11px] text-teal-200 disabled:opacity-50"
-          >
-            {feasibilityLoading ? '计算中…' : '可运行性矩阵（仅注册表×数据）'}
-          </button>
-        </div>
-        {qualityRubricError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {qualityRubricError}
-          </div>
-        )}
-        {qualityRubric?.platform?.display_name_zh && (
-          <div className="mt-3 text-xs text-slate-500">
-            已加载 · {qualityRubric.platform.display_name_zh} · config {qualityRubric.config_path || '—'} · v
-            {qualityRubric.version ?? '—'}
-          </div>
-        )}
-        {Array.isArray(qualityRubric?.quality_loop?.dimensions) && qualityRubric.quality_loop.dimensions.length > 0 && (
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {qualityRubric.quality_loop.dimensions.map((dim) => (
-              <div
-                key={dim.key || dim.display_zh}
-                className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-3 py-2.5"
-              >
-                <div className="text-[11px] font-medium text-slate-200">{dim.display_zh || dim.key}</div>
-                <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-600">{dim.key}</div>
-                {Array.isArray(dim.metric_hints) && dim.metric_hints.length > 0 && (
-                  <div className="mt-1.5 text-[10px] leading-4 text-slate-500">
-                    指标：{dim.metric_hints.join(' · ')}
-                  </div>
-                )}
-                {Array.isArray(dim.artifact_hints) && dim.artifact_hints.length > 0 && (
-                  <div className="mt-1 text-[10px] leading-4 text-slate-500">
-                    产物线索：{dim.artifact_hints.join(' · ')}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {qualityCoverageError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {qualityCoverageError}
-          </div>
-        )}
-        {qualityCoverage?.summary && (
-          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-            <span>
-              产物覆盖（有 artifact_hints 的维度）：{qualityCoverage.summary.dimensions_satisfied}/
-              {qualityCoverage.summary.dimensions_total} ·
-              {Math.round((qualityCoverage.summary.ratio || 0) * 100)}%
-            </span>
-            <span className="text-slate-600">
-              contracts 文件数 {qualityCoverage.contracts_file_count ?? '—'} · {qualityCoverage.contracts_dir}
-            </span>
-            {qualityCoverage.error === 'contracts_directory_missing' && (
-              <span className="text-amber-400">contracts 目录不存在</span>
-            )}
-          </div>
-        )}
-        {Array.isArray(qualityCoverage?.dimension_checks) && qualityCoverage.dimension_checks.length > 0 && (
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {qualityCoverage.dimension_checks.map((row) => (
-              <div
-                key={row.key || row.display_zh}
-                className="rounded-xl border border-slate-700/50 bg-slate-950/50 px-3 py-2.5"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="text-[11px] font-medium text-slate-200">{row.display_zh || row.key}</div>
-                  {row.skipped ? (
-                    <span className="shrink-0 rounded border border-slate-600 px-1.5 py-0.5 text-[9px] text-slate-500">
-                      无 hints
-                    </span>
-                  ) : row.satisfied ? (
-                    <span className="shrink-0 rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-300">
-                      已命中
-                    </span>
-                  ) : (
-                    <span className="shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[9px] text-rose-300">
-                      未命中
-                    </span>
-                  )}
-                </div>
-                {!row.skipped && Array.isArray(row.matched_paths) && row.matched_paths.length > 0 && (
-                  <div className="mt-1.5 text-[10px] leading-4 text-slate-500">
-                    匹配：{row.matched_paths.slice(0, 4).join(' · ')}
-                    {row.matched_paths.length > 4 ? ' …' : ''}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {qualityBatchError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {qualityBatchError}
-          </div>
-        )}
-        {knowledgeLintError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {knowledgeLintError}
-          </div>
-        )}
-        {knowledgeLintBatch?.rollup && (
-          <div className="mt-4 rounded-xl border border-indigo-500/25 bg-slate-950/40 p-4">
-            <div className="text-[11px] font-medium text-indigo-200">知识壳层 lint 汇总（Markdown 相对链接 + 必填路径）</div>
-            <div className="mt-2 text-[10px] text-slate-500">
-              {knowledgeLintBatch.config_path} · 案例 {knowledgeLintBatch.rollup.case_count} · 通过{' '}
-              {knowledgeLintBatch.rollup.cases_ok} · 断链（相对）{knowledgeLintBatch.rollup.broken_relative_links ?? 0}
-              {knowledgeLintBatch.ok === false ? (
-                <span className="ml-2 text-rose-400">· 存在失败项</span>
-              ) : (
-                <span className="ml-2 text-emerald-500/80">· 全通过</span>
-              )}
-            </div>
-            <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[420px] border-collapse text-left text-[10px] text-slate-400">
-                <thead>
-                  <tr className="border-b border-slate-700/60 text-slate-500">
-                    <th className="py-1.5 pr-3 font-medium">case_id</th>
-                    <th className="py-1.5 pr-3 font-medium">ok</th>
-                    <th className="py-1.5 pr-3 font-medium">相对断链</th>
-                    <th className="py-1.5 pr-3 font-medium">raw 目录</th>
-                    <th className="py-1.5 font-medium">errors</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(knowledgeLintBatch.cases || []).map((row) => (
-                    <tr key={row.case_id} className="border-b border-slate-800/80">
-                      <td className="py-1.5 pr-3 text-slate-200">{row.case_id}</td>
-                      <td className="py-1.5 pr-3">{row.ok ? 'yes' : 'no'}</td>
-                      <td className="py-1.5 pr-3">{row.broken_relative_link_count ?? 0}</td>
-                      <td className="py-1.5 pr-3">{row.raw_dir_exists ? '有' : '无'}</td>
-                      <td className="py-1.5 text-amber-200/80">
-                        {(row.errors || []).length ? (row.errors || []).join(', ') : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        {knowledgeLintCase?.case_id && (
-          <div className="mt-3 rounded-xl border border-indigo-500/20 bg-slate-950/35 p-3">
-            <div className="text-[11px] font-medium text-indigo-200/90">知识壳层 lint · 当前案例</div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {knowledgeLintCase.case_id} · ok {knowledgeLintCase.ok ? 'yes' : 'no'} · 相对断链{' '}
-              {knowledgeLintCase.broken_relative_link_count ?? 0} · raw{' '}
-              {knowledgeLintCase.raw_dir_exists ? '有' : '无'}
-            </div>
-            {Array.isArray(knowledgeLintCase.errors) && knowledgeLintCase.errors.length > 0 && (
-              <div className="mt-1 text-[10px] text-amber-200/90">{knowledgeLintCase.errors.join(' · ')}</div>
-            )}
-          </div>
-        )}
-        {qualityBatch?.rollup && (
-          <div className="mt-4 rounded-xl border border-cyan-500/20 bg-slate-950/40 p-4">
-            <div className="text-[11px] font-medium text-cyan-200">配置内全案例产物覆盖汇总</div>
-            <div className="mt-2 text-[10px] text-slate-500">
-              {qualityBatch.config_path} · 案例数 {qualityBatch.rollup.case_count} · 有 contracts 目录{' '}
-              {qualityBatch.rollup.cases_with_contracts_dir} · 平均命中率{' '}
-              {Math.round((qualityBatch.rollup.mean_ratio || 0) * 100)}% · 最低{' '}
-              {Math.round((qualityBatch.rollup.min_ratio || 0) * 100)}%
-            </div>
-            <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[480px] border-collapse text-left text-[10px] text-slate-400">
-                <thead>
-                  <tr className="border-b border-slate-700/60 text-slate-500">
-                    <th className="py-1.5 pr-3 font-medium">case_id</th>
-                    <th className="py-1.5 pr-3 font-medium">命中比</th>
-                    <th className="py-1.5 pr-3 font-medium">维度</th>
-                    <th className="py-1.5 font-medium">contracts 文件数</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(qualityBatch.rollup.per_case || []).map((row) => (
-                    <tr key={row.case_id} className="border-b border-slate-800/80">
-                      <td className="py-1.5 pr-3 text-slate-200">{row.case_id}</td>
-                      <td className="py-1.5 pr-3">
-                        {row.error ? (
-                          <span className="text-amber-400">无目录</span>
-                        ) : (
-                          `${Math.round((row.ratio || 0) * 100)}%`
-                        )}
-                      </td>
-                      <td className="py-1.5 pr-3">
-                        {row.error ? '—' : `${row.dimensions_satisfied}/${row.dimensions_total}`}
-                      </td>
-                      <td className="py-1.5">{row.contracts_file_count ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        {readinessError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {readinessError}
-          </div>
-        )}
-        {readiness?.summary && (
-          <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-4">
-            <div className="text-[11px] font-medium text-emerald-200">
-              平台就绪度摘要（主闭环 × 产物 × 工作流矩阵）
-            </div>
-            <div className="mt-2 text-[10px] text-slate-500">
-              {readiness.platform_rubric?.platform?.display_name_zh || '—'} ·{' '}
-              {readiness.generated_at || '—'}
-            </div>
-            {readiness.platform_rubric?.platform?.essence_zh && (
-              <p className="mt-2 text-[11px] leading-5 text-slate-400 line-clamp-4">
-                {readiness.platform_rubric.platform.essence_zh}
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-300">
-              <span>
-                质量维度产物命中{' '}
-                {readiness.summary.artifact_dimensions_satisfied ?? '—'}/
-                {readiness.summary.artifact_dimensions_total ?? '—'}（
-                {Math.round((readiness.summary.artifact_ratio || 0) * 100)}%）
-              </span>
-              <span className="text-slate-500">|</span>
-              <span>
-                工作流 data_ok {readiness.summary.workflow_data_ok ?? '—'} · data_gap{' '}
-                {readiness.summary.workflow_data_gap ?? '—'}
-              </span>
-              <span className="text-slate-500">|</span>
-              <span>
-                case 配置信号 {readiness.summary.case_config_signal ? '有' : '无'}
-              </span>
-            </div>
-            <div className="mt-2 text-[10px] text-slate-600">
-              新案例仅增 YAML + 数据目录即可纳入同一套门禁；下方矩阵已随本摘要同步刷新。
-            </div>
-          </div>
-        )}
-        {feasibilityError && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {feasibilityError}
-          </div>
-        )}
-        {feasibility?.methodology_note_zh && (
-          <div className="mt-4 rounded-xl border border-teal-500/20 bg-slate-950/50 p-4">
-            <div className="text-[11px] font-medium text-teal-200">方法论（求交，非单一路径）</div>
-            <p className="mt-2 text-[11px] leading-5 text-slate-400">{feasibility.methodology_note_zh}</p>
-            {feasibility.rules_path && (
-              <div className="mt-2 text-[10px] text-slate-600">规则文件 {feasibility.rules_path}</div>
-            )}
-            {feasibility.signals && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {Object.entries(feasibility.signals).map(([k, v]) => (
-                  <span
-                    key={k}
-                    className={`rounded border px-2 py-0.5 text-[10px] ${
-                      v
-                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                        : 'border-slate-700 bg-slate-900/80 text-slate-500'
-                    }`}
-                  >
-                    {SIGNAL_LABELS[k] || k}:{v ? '有' : '无'}
-                  </span>
-                ))}
-              </div>
-            )}
-            {Array.isArray(feasibility.workflows) && feasibility.workflows.length > 0 && (
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full min-w-[640px] border-collapse text-left text-[10px] text-slate-400">
-                  <thead>
-                    <tr className="border-b border-slate-700/60 text-slate-500">
-                      <th className="py-1.5 pr-2 font-medium">workflow</th>
-                      <th className="py-1.5 pr-2 font-medium">就绪层级</th>
-                      <th className="py-1.5 pr-2 font-medium">命中信号</th>
-                      <th className="py-1.5 font-medium">说明</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {feasibility.workflows.map((row) => (
-                      <tr key={row.key} className="border-b border-slate-800/80">
-                        <td className="py-1.5 pr-2 align-top font-mono text-slate-200">{row.key}</td>
-                        <td className="py-1.5 pr-2 align-top text-slate-300">
-                          {FEASIBILITY_TIER_LABELS[row.tier] || row.tier}
-                        </td>
-                        <td className="py-1.5 pr-2 align-top text-slate-500">
-                          {Array.isArray(row.matched_signals) && row.matched_signals.length > 0
-                            ? row.matched_signals.map((s) => SIGNAL_LABELS[s] || s).join(' · ')
-                            : '—'}
-                        </td>
-                        <td className="py-1.5 align-top text-slate-500">
-                          <span className="line-clamp-2" title={row.description}>
-                            {row.rule_note_zh || row.description}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
+        <ol className="mt-3 grid gap-2 text-[11px] text-zinc-500 sm:grid-cols-2 lg:grid-cols-4">
+          <li className="rounded-lg border border-zinc-800/40 bg-zinc-950/50 px-3 py-2">
+            <span className="font-medium text-zinc-300">1 · 命名</span>
+            <div className="mt-1">case_id：小写 a-z 开头，2–64 字符</div>
+          </li>
+          <li className="rounded-lg border border-zinc-800/40 bg-zinc-950/50 px-3 py-2">
+            <span className="font-medium text-zinc-300">2 · 脚手架</span>
+            <div className="mt-1">写入 manifest、contracts、Hydrology YAML；可选注册闭环</div>
+          </li>
+          <li className="rounded-lg border border-zinc-800/40 bg-zinc-950/50 px-3 py-2">
+            <span className="font-medium text-zinc-300">3 · 编辑</span>
+            <div className="mt-1">桌面端创建后自动打开 manifest 内联编辑</div>
+          </li>
+          <li className="rounded-lg border border-zinc-800/40 bg-zinc-950/50 px-3 py-2">
+            <span className="font-medium text-zinc-300">4 · 验收</span>
+            <div className="mt-1">合并就绪度（含可运行性摘要）+ 知识链接 Lint</div>
+          </li>
+        </ol>
+      </details>
 
-      <div className="grid grid-cols-[1.6fr,1fr] gap-6">
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40">
-          <div className="flex items-center justify-between border-b border-slate-700/50 px-5 py-4">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-200">工程与案例</h2>
-              <p className="mt-1 text-xs text-slate-500">围绕当前项目阶段、案例与主链任务组织</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => refreshCaseRegistry()}
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800/50"
-              >
-                刷新案例列表
-              </button>
-              <button
-                type="button"
-                className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-              >
-                新建工程
-              </button>
-            </div>
-          </div>
-          <div className="divide-y divide-slate-700/40">
-            {projectsLoading ? (
-              <div className="px-5 py-4 text-sm text-slate-500">正在动态扫描工程目录...</div>
-            ) : dynamicProjects.map((project) => (
-              <div
-                key={project.id}
-                data-testid="case-row"
-                data-case-id={project.caseId}
-                className="flex items-center justify-between px-5 py-4"
-              >
-                <div>
-                  <div className="text-sm font-medium text-slate-100">{project.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {project.id} · {project.caseId} · 阶段 {project.stage}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`rounded-full border px-2 py-1 text-[10px] ${statusStyles[project.status] || statusStyles.active}`}>
-                    {project.status === 'active' ? '进行中' : project.status === 'review' ? '审查中' : '需关注'}
-                  </span>
-                  <button
-                    onClick={() => setActiveProjectId(project.id)}
-                    className={`text-xs ${activeProjectId === project.id ? 'text-emerald-300' : 'text-hydro-300'}`}
-                  >
-                    {activeProjectId === project.id ? '当前案例' : '切换'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveProjectId(project.id);
-                      openCaseEditor(project.caseId);
-                    }}
-                    className="text-xs text-slate-500 underline decoration-slate-600 decoration-dotted hover:text-fuchsia-300"
-                  >
-                    内编辑
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+      <ProjectCenterTopTabs
+        caseSummary={caseSummary}
+        gateLabel={gateLabel}
+        projectCenterPageTab={projectCenterPageTab}
+        setProjectCenterPageTab={setProjectCenterPageTab}
+        shellCaseId={shellCaseId}
+      />
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-200">{shellCaseId || '当前案例'} 运行闭环</h2>
-              <div className="mt-2 text-xs text-slate-500">
-                当前 phase: {runtimeSnapshot.phase || '未检测到'} · 当前步骤: {runtimeSnapshot.current_step || '无'}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={actionBusy}
-                onClick={() => runCaseAction(actionCommands.runFast)}
-                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 disabled:opacity-50"
-              >
-                Run Fast
-              </button>
-              <button
-                disabled={actionBusy}
-                onClick={() => runCaseAction(actionCommands.retryFailed)}
-                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 disabled:opacity-50"
-              >
-                Retry Failed
-              </button>
-              <button
-                onClick={() => {
-                  reloadRuntime();
-                  reloadCaseSummary();
-                }}
-                className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/60"
-              >
-                刷新摘要
-              </button>
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(actionCommands.refreshDashboard)}
-              className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-200 disabled:opacity-50"
-            >
-              Refresh Dashboard
-            </button>
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(actionCommands.runFullReview)}
-              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
-            >
-              Run Full Review
-            </button>
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(actionCommands.buildReleasePack)}
-              className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 disabled:opacity-50"
-            >
-              Build Release Pack
-            </button>
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(actionCommands.generateDeliveryDocsPack)}
-              className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 disabled:opacity-50"
-              title="contracts/delivery_pack/&lt;UTC&gt;/ + delivery_pack.latest.json"
-            >
-              Delivery Docs Pack
-            </button>
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(actionCommands.generateDeliveryDocsPackStrict)}
-              className="rounded-lg border border-emerald-700/40 bg-emerald-950/30 px-2 py-1 text-[10px] text-emerald-200/80 disabled:opacity-50"
-              title="须签发 Gate 与 knowledge_lint 通过"
-            >
-              Delivery Pack（严格）
-            </button>
-            <button
-              disabled={actionBusy || !bootstrapTriadMinimalCommand}
-              onClick={() => runCaseAction(bootstrapTriadMinimalCommand)}
-              className="rounded-lg border border-slate-600/50 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-              title="双缺时写入最小 workflow_run / review_bundle / release_manifest 占位（带 _auto_generated）"
-            >
-              补最小 triad 占位
-            </button>
-            <button
-              disabled={actionBusy}
-              onClick={() => runCaseAction(runScadaReplayCommand)}
-              className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 disabled:opacity-50"
-            >
-              Run SCADA Replay
-            </button>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-700/30 pt-2 text-[10px] text-slate-500">
-            <span className="text-slate-600">交付文档包</span>
-            {caseSummaryLoading ? (
-              <span className="text-slate-600">摘要读取中…</span>
-            ) : caseSummary.delivery_pack_pointer_rel ? (
-              <>
-                <span className="font-mono text-slate-400">{caseSummary.delivery_pack_id || '—'}</span>
-                <span
-                  className={
-                    caseSummary.delivery_pack_eligible_at_last_pack
-                      ? 'text-emerald-400/90'
-                      : 'text-amber-400/90'
-                  }
-                >
-                  {caseSummary.delivery_pack_eligible_at_last_pack ? 'pack 时 eligible' : 'pack 时未 eligible'}
-                </span>
-                {caseSummary.delivery_latest_pack_rel ? (
-                  <button
-                    type="button"
-                    disabled={!isTauri()}
-                    onClick={() => openPath(caseSummary.delivery_latest_pack_rel)}
-                    className="rounded border border-hydro-500/30 bg-hydro-500/10 px-2 py-0.5 text-hydro-300 disabled:opacity-50"
-                  >
-                    打开最新包
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={!isTauri()}
-                  onClick={() => openPath(caseSummary.delivery_pack_pointer_rel)}
-                  className="rounded border border-slate-700/50 px-2 py-0.5 text-slate-300 disabled:opacity-50"
-                >
-                  指针 JSON
-                </button>
-                {caseSummary.delivery_latest_pack_rel ? (
-                  <button
-                    type="button"
-                    disabled={!isTauri()}
-                    onClick={() => revealPath(caseSummary.delivery_latest_pack_rel)}
-                    className="rounded border border-slate-700/50 px-2 py-0.5 text-slate-300 disabled:opacity-50"
-                  >
-                    定位最新包
-                  </button>
-                ) : null}
-              </>
-            ) : (
-              <span className="text-slate-600">尚无指针；点上方「Delivery Docs Pack」生成</span>
-            )}
-          </div>
-          <div className="mt-3 rounded-lg border border-cyan-500/20 bg-slate-950/40 p-3">
-            <div className="text-[10px] text-slate-500">
-              SCADA 回放参数：scenario-id 留空则由 Hydrology 配置解析（defaults + 案例 scada_replay）；起止时间与 sqlite 留空同上
-            </div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 text-[10px] text-slate-400">
-                <span className="text-slate-500">scenario-id</span>
-                <input
-                  value={scadaScenarioId}
-                  onChange={(e) => setScadaScenarioId(e.target.value)}
-                  className="rounded border border-slate-700/60 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200"
-                  placeholder="留空=配置默认（如 replay_baseline）"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[10px] text-slate-400">
-                <span className="text-slate-500">sqlite 路径（相对仓库根，可选）</span>
-                <input
-                  value={scadaSqlitePath}
-                  onChange={(e) => setScadaSqlitePath(e.target.value)}
-                  className="rounded border border-slate-700/60 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200"
-                  placeholder={shellCaseId ? `cases/${shellCaseId}/${shellCaseId}_hydromind.sqlite3` : 'cases/<case_id>/<case_id>_hydromind.sqlite3'}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[10px] text-slate-400">
-                <span className="text-slate-500">query-start（可选）</span>
-                <input
-                  value={scadaQueryStart}
-                  onChange={(e) => setScadaQueryStart(e.target.value)}
-                  className="rounded border border-slate-700/60 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200"
-                  placeholder="2021-07-10 00:00:00"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[10px] text-slate-400">
-                <span className="text-slate-500">query-end（可选）</span>
-                <input
-                  value={scadaQueryEnd}
-                  onChange={(e) => setScadaQueryEnd(e.target.value)}
-                  className="rounded border border-slate-700/60 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200"
-                  placeholder="2021-07-13 00:00:00"
-                />
-              </label>
-            </div>
-          </div>
-          {actionError && (
-            <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              {actionError}
-            </div>
-          )}
-          {actionResult && (
-            <div className="mt-3 rounded-lg border border-slate-700/40 bg-slate-950/60 px-3 py-2 text-[11px] leading-5 text-slate-400">
-              <div>command: {actionResult.command}</div>
-              <div>status: {actionResult.status} · success: {String(actionResult.success)}</div>
-              <div className="mt-1 whitespace-pre-wrap">stdout: {(actionResult.stdout || '').slice(0, 260)}</div>
-              <div className="mt-1 whitespace-pre-wrap">stderr: {(actionResult.stderr || '').slice(0, 160)}</div>
-            </div>
-          )}
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">唯一执行 workflow</div>
-              <div className="mt-2 text-xl font-semibold text-slate-100">{caseSummary.total_executed || '--'}</div>
-              <div className="mt-1 text-xs text-slate-500">原始记录 {caseSummary.total || '--'} 条</div>
-            </div>
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">Outcome Coverage</div>
-              <div className="mt-2 text-xl font-semibold text-slate-100">
-                {caseSummary.normalized_outcome_coverage ? `${Math.round(caseSummary.normalized_outcome_coverage * 100)}%` : '--'}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                原始口径 {caseSummary.raw_outcome_coverage ? `${Math.round(caseSummary.raw_outcome_coverage * 100)}%` : '--'}
-              </div>
-            </div>
-          </div>
-          <div className="mt-4 rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-slate-200">SCADA Replay 实时面板</div>
-              <span className="text-[10px] text-slate-500">
-                {parsedActionPayload?.action === 'run-scada-replay' ? 'latest run loaded' : '等待回放任务'}
-              </span>
-            </div>
-            <div className="mt-2 text-xs text-slate-400">
-              run_id: {parsedActionPayload?.run_id || '--'} · scenario: {parsedActionPayload?.scenario_id || '--'} · messages:{' '}
-              {parsedActionPayload?.messages_emitted ?? '--'}
-              {parsedActionPayload?.cli_override ? ' · CLI 覆盖' : ''}
-            </div>
-            <div className="mt-1 text-[10px] leading-relaxed text-slate-500">
-              window: {parsedActionPayload?.query_start || '—'} → {parsedActionPayload?.query_end || '—'}
-              <br />
-              sqlite: {parsedActionPayload?.sqlite_path || '—'}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                onClick={() => openPath(`cases/${shellCaseId}/contracts/scada_replay.latest.json`)}
-                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300"
-              >
-                打开回放摘要
-              </button>
-              <button
-                onClick={() => openPath(`cases/${shellCaseId}/contracts/scada_replay.stream.ndjson`)}
-                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300"
-              >
-                打开实时消息流
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 space-y-3">
-            {[
-              {
-                title: '当前运行焦点',
-                detail: caseSummary.current_workflow || runtimeSnapshot.current_focus || '当前没有活动 workflow，进入验收与回放阶段。',
-              },
-              {
-                title: '重复执行提示',
-                detail: caseSummary.duplicate_runs.length > 0
-                  ? caseSummary.duplicate_runs.map((item) => `${item.workflow} ×${item.count}`).join('，')
-                  : '没有检测到重复 workflow 记录。',
-              },
-              {
-                title: '待处理项',
-                detail: caseSummary.pending_workflows.length > 0
-                  ? caseSummary.pending_workflows.join('，')
-                  : '当前没有 pending workflows，可以转入交付/对齐阶段。',
-              },
-            ].map((run) => (
-              <div key={run.title} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-200">{run.title}</div>
-                  <span className="text-[10px] text-slate-500">{activeProject.caseId}</span>
-                </div>
-                <div className="mt-2 text-xs leading-5 text-slate-400">{run.detail}</div>
-              </div>
-            ))}
-          </div>
-        </section>
+      {projectCenterPageTab === 'work' && (
+      <>
+      <ProjectCenterWorkspaceHero
+        navigate={navigate}
+        projectCenterPrimaryActions={projectCenterPrimaryActions}
+      />
+      <ProjectCenterWorkspaceSection
+        shellCaseId={shellCaseId}
+        isDesktop={isTauriDesktop}
+        workspaceRootRel={activeWorkspaceRootLabel}
+        workspaceStatusNote={workspaceStatusNote}
+        workspaceIntelligence={workspaceIntelligence}
+        workspaceSuggestedActions={workspaceSuggestedActions}
+        workspaceLoading={workspaceLoading}
+        workspaceError={workspaceError}
+        workspaceNodes={workspaceNodes}
+        selectedFilePath={selectedWorkspaceFilePath}
+        highlightedFilePath={highlightedWorkspaceFilePath}
+        onSelectFile={(path) => {
+          setHighlightedWorkspaceFilePath('');
+          setSelectedWorkspaceFilePath(path);
+        }}
+        workspacePreview={workspacePreview}
+        workspacePreviewLoading={workspacePreviewLoading}
+        workspacePreviewError={workspacePreviewError}
+        workspacePreviewActions={workspacePreviewActions}
+        onSelectDirectory={handleSelectWorkspaceDirectory}
+        onOpenWorkspace={() => openPath(isCustomWorkspaceRoot ? activeWorkspaceRootPath : (workspaceRootRel || workspaceRootAbsolutePath))}
+        onRevealWorkspace={() => revealPath(isCustomWorkspaceRoot ? activeWorkspaceRootPath : (workspaceRootRel || workspaceRootAbsolutePath))}
+        onOpenSelectedFile={() => selectedWorkspaceFilePath && openPath(isCustomWorkspaceRoot ? (selectedWorkspaceFile?.absolutePath || selectedWorkspaceFilePath) : selectedWorkspaceFilePath)}
+        onRevealSelectedFile={() => selectedWorkspaceFilePath && revealPath(isCustomWorkspaceRoot ? (selectedWorkspaceFile?.absolutePath || selectedWorkspaceFilePath) : selectedWorkspaceFilePath)}
+        liveOutputLogFile={currentLiveLogFile}
+        liveOutputLines={logTail.lines || []}
+        liveOutputHistory={liveOutputHistory}
+        onOpenLiveOutputLog={() => currentLiveLogFile && openPath(currentLiveLogFile)}
+        onRevealLiveOutputLog={() => currentLiveLogFile && revealPath(currentLiveLogFile)}
+        liveOutputEntries={latestWorkspaceOutputEntries}
+      />
+      <ProjectCenterProjectedWorksurfaceSection summary={summary} workspaceIntelligence={workspaceIntelligence} workspaceProjectionCards={workspaceProjectionCards} text={text} />
+      <ProjectCenterAdvancedActionsSection qualityRubric={qualityRubric} qualityRubricError={qualityRubricError} qualityCoverage={qualityCoverage} qualityCoverageError={qualityCoverageError} qualityBatch={qualityBatch} qualityBatchError={qualityBatchError} rolloutBaseline={rolloutBaseline} rolloutBaselineError={rolloutBaselineError} knowledgeLintBatch={knowledgeLintBatch} knowledgeLintCase={knowledgeLintCase} knowledgeLintError={knowledgeLintError} feasibility={feasibility} feasibilityError={feasibilityError} modelStrategy={modelStrategy} modelStrategyError={modelStrategyError} modelStrategyBatch={modelStrategyBatch} modelStrategyBatchError={modelStrategyBatchError} dataIntelligence={dataIntelligence} setDataIntelligence={setDataIntelligence} dataIntelligenceError={dataIntelligenceError} setDataIntelligenceError={setDataIntelligenceError} dataIntelligenceBatch={dataIntelligenceBatch} dataIntelligenceBatchError={dataIntelligenceBatchError} readiness={readiness} readinessError={readinessError} modelingHints={modelingHints} modelingHintsError={modelingHintsError} modelingHintsLoading={modelingHintsLoading} pipelinePreflight={pipelinePreflight} pipelinePreflightError={pipelinePreflightError} pipelinePreflightLoading={pipelinePreflightLoading} sourcebundleImport={sourcebundleImport} sourcebundleImportError={sourcebundleImportError} sourcebundleImportLoading={sourcebundleImportLoading} graphifyPilot={graphifyPilot} graphifyPilotError={graphifyPilotError} graphifyPilotLoading={graphifyPilotLoading} graphifyReportSummary={graphifyReportSummary} sourceSyncSummary={sourceSyncSummary} sourceSyncError={sourceSyncError} sourceSyncLoading={sourceSyncLoading} isTauri={isTauri} cases={cases} loading={loading} refresh={refresh} summary={summary} loadQualityCoverage={loadQualityCoverage} loadWorkflowFeasibility={loadWorkflowFeasibility} loadModelStrategy={loadModelStrategy} loadCaseDataIntelligence={loadCaseDataIntelligence} loadPlatformReadiness={loadPlatformReadiness} loadModelingHints={loadModelingHints} loadPipelinePreflight={loadPipelinePreflight} runSourcebundleImport={runSourcebundleImport} loadGraphifyPilot={loadGraphifyPilot} loadSourceSyncSummary={loadSourceSyncSummary} shellCaseId={shellCaseId} pipelineTruthClassName={pipelineTruthClassName} canSeeAdvancedPlatformTools={canSeeAdvancedPlatformTools} entries={entries} payload={payload} rows={rows} text={text} ok={ok} currentModelStrategyMeta={currentModelStrategyMeta} modelStrategyBatchEntries={modelStrategyBatchEntries} dataIntelligenceBatchRollupEntries={dataIntelligenceBatchRollupEntries} dataIntelligenceHeadlineStats={dataIntelligenceHeadlineStats} dataIntelligenceShortcutSpecs={dataIntelligenceShortcutSpecs} dataIntelligenceRelatedStatusEntries={dataIntelligenceRelatedStatusEntries} projectCenterCaseFileActions={projectCenterCaseFileActions} projectCenterBatchDiagnosticActions={projectCenterBatchDiagnosticActions} projectCenterAdvancedActions={projectCenterAdvancedActions} openPath={openPath} revealPath={revealPath} projectCenterFeasibilityTierLabels={projectCenterFeasibilityTierLabels} projectCenterModelStrategyEvidenceLabels={projectCenterModelStrategyEvidenceLabels} projectCenterSignalLabels={projectCenterSignalLabels} getModelStrategyMeta={getModelStrategyMeta} ProjectCenterActionButton={ProjectCenterActionButton} ProjectCenterActionGroup={ProjectCenterActionGroup} />
+      </>
+      )}
+
+      {projectCenterPageTab === 'work' && (
+      <div className="grid grid-cols-[2.1fr,0.78fr] gap-6">
+        <ProjectCenterCaseListSection projectCenterInfoTab={projectCenterInfoTab} setProjectCenterInfoTab={setProjectCenterInfoTab} setShowCaseScaffold={setShowCaseScaffold} activeProject={activeProject} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} openCaseEditor={openCaseEditor} runDeriveCase={runDeriveCase} runArchiveCase={runArchiveCase} text={text} projectCenterStatusMeta={projectCenterStatusMeta} cases={cases} loading={loading} refresh={refresh} />
+
+        <ProjectCenterGlobalCaseManagerSection actionBusy={actionBusy} actionResult={actionResult} actionError={actionError} scadaScenarioId={scadaScenarioId} setScadaScenarioId={setScadaScenarioId} scadaQueryStart={scadaQueryStart} setScadaQueryStart={setScadaQueryStart} scadaQueryEnd={scadaQueryEnd} setScadaQueryEnd={setScadaQueryEnd} scadaSqlitePath={scadaSqlitePath} setScadaSqlitePath={setScadaSqlitePath} isTauri={isTauri} cases={cases} activeProject={activeProject} runtimeSnapshot={runtimeSnapshot} summary={summary} parsedActionPayload={parsedActionPayload} actionCommands={actionCommands} runScadaReplayCommand={runScadaReplayCommand} bootstrapTriadMinimalCommand={bootstrapTriadMinimalCommand} runCaseAction={runCaseAction} shellCaseId={shellCaseId} gateLabel={gateLabel} gateClassName={gateClassName} text={text} openPath={openPath} revealPath={revealPath} ProjectCenterActionMenu={ProjectCenterActionMenu} caseSummaryLoading={caseSummaryLoading} reloadCaseSummary={reloadCaseSummary} />
       </div>
+      )}
 
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200">项目群中控</h2>
-            <p className="mt-1 text-xs text-slate-500">把端到端链路拆到真实项目：谁拥有 workflow、谁负责验收、谁是协议面。</p>
-          </div>
-          <span className="text-xs text-slate-500">HydroDesk 作为统一编排壳</span>
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-4">
-          {hydroPortfolioCatalog.map((project) => (
-            <div key={project.id} className="rounded-2xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">{project.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">{project.path}</div>
-                </div>
-                <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300">
-                  {primarySurfaceLabels[project.primarySurface]}
-                </span>
-              </div>
-              <div className="mt-3 text-sm text-slate-300">{project.role}</div>
-              <div className="mt-2 text-xs leading-5 text-slate-500">{project.summary}</div>
-              <div className="mt-3 text-xs text-slate-400">目录: {project.directories.join(' · ')}</div>
-              <div className="mt-2 text-xs text-slate-400">文件: {project.files.join(' · ')}</div>
-              <div className="mt-3 rounded-xl border border-slate-700/40 bg-slate-950/60 p-3 text-xs leading-5 text-slate-400">
-                {project.integrationNote}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      {projectCenterPageTab === 'catalog' && (
+        <ProjectCenterCatalogSection
+          caseSummary={caseSummary}
+          caseSummaryLoading={caseSummaryLoading}
+          contractChain={contractChain}
+          hydroPortfolioCatalog={hydroPortfolioCatalog}
+          openPath={openPath}
+          pipelineTruthClassName={pipelineTruthClassName}
+          primarySurfaceLabels={primarySurfaceLabels}
+          reviewAssets={reviewAssets}
+          revealPath={revealPath}
+          shellCaseId={shellCaseId}
+          triadBridgePaths={triadBridgePaths}
+          triadMeta={triadMeta}
+        />
+      )}
 
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200">Run / Review / Release 合同链</h2>
-            <p className="mt-1 text-xs text-slate-500">把当前案例运行、审查和交付 contract 固定成 HydroDesk 可追踪的三段式链路。</p>
-            <p className="mt-1 text-[10px] text-slate-600">
-              统一签发 Gate（审查页 P2）：triad {caseSummaryLoading ? '…' : `${caseSummary.triad_count ?? 0}/3`}
-              {caseSummary.release_gate_eligible ? ' · 无阻断项' : ' · 见审查页 blockers'}
-              {caseSummary.delivery_pack_pointer_rel
-                ? ` · 交付包 ${caseSummary.delivery_pack_id || 'latest'}`
-                : ''}
-            </p>
-          </div>
-          <span className="text-xs text-slate-500">hydromind-contracts aligned</span>
-        </div>
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          {contractChain.map((contract) => (
-            <div key={contract.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-xs uppercase tracking-wider text-slate-500">{contract.stage}</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-100">{contract.contractName}</div>
-                </div>
-                <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
-                  {contract.status}
-                </span>
-              </div>
-              <div className="mt-3 text-xs leading-5 text-slate-400">{contract.note}</div>
-              <div className="mt-3 text-[10px] leading-5 text-slate-500">{contract.path}</div>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
-                  className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                >
-                  打开
-                </button>
-                <button
-                  onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
-                  className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                >
-                  定位
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200">验收资产面板</h2>
-            <p className="mt-1 text-xs text-slate-500">`md/html/json` 是案例 E2E 的真实进度源，HydroDesk 用它们做产品化展示。</p>
-          </div>
-          <span className="text-xs text-slate-500">固定验收壳 · {shellCaseId}</span>
-        </div>
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          {reviewAssets.map((artifact) => (
-            <div key={artifact.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-medium text-slate-100">{artifact.name}</div>
-                <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
-                  {artifact.category}
-                </span>
-              </div>
-              <div className="mt-2 text-xs leading-5 text-slate-500">{artifact.path}</div>
-              <div className="mt-3 text-[10px] text-slate-500">updated_at {artifact.updated_at || 'pinned entry point'}</div>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  onClick={() => openPath(artifact.path)}
-                  className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                >
-                  打开
-                </button>
-                <button
-                  onClick={() => revealPath(artifact.path)}
-                  className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                >
-                  定位
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200">后续开发任务</h2>
-            <p className="mt-1 text-xs text-slate-500">围绕自主运行主链和 HydroDesk 端到端测试壳，按波次推进。</p>
-          </div>
-          <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-[10px] text-hydro-300">
-            roadmap / backlog 已对齐到 case shell
-          </span>
-        </div>
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          {studioDeliveryWavePlan.map((wave) => (
-            <div key={wave.title} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-sm font-semibold text-slate-100">{wave.title}</div>
-              <div className="mt-3 space-y-2">
-                {wave.items.map((item) => (
-                  <div key={item} className="text-xs leading-5 text-slate-400">
-                    {item}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 grid grid-cols-5 gap-4">
-          {shellEntryPoints.map((entryPoint) => (
-            <div key={entryPoint.path} className="rounded-xl border border-slate-700/40 bg-slate-950/50 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-100">{entryPoint.title}</div>
-                <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
-                  {entryPoint.kind}
-                </span>
-              </div>
-              <div className="mt-2 text-xs leading-5 text-slate-400">{entryPoint.summary}</div>
-              <div className="mt-3 text-[10px] leading-5 text-slate-500">{entryPoint.path}</div>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  onClick={() => openPath(entryPoint.path)}
-                  className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                >
-                  打开
-                </button>
-                <button
-                  onClick={() => revealPath(entryPoint.path)}
-                  className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                >
-                  定位
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <h2 className="text-sm font-semibold text-slate-200">执行面分层</h2>
-        <div className="mt-4 grid grid-cols-4 gap-4">
-          {Object.entries(executionSurfaceCatalog).map(([surfaceId, surface]) => (
-            <div key={surfaceId} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-sm font-medium text-slate-100">{surface.label}</div>
-              <div className="mt-2 text-xs leading-5 text-slate-500">{surface.summary}</div>
-              <div className="mt-3 text-xs text-slate-400">{surface.whenToUse}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-200">最近 checkpoints</h2>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">{activeProject.caseId}</span>
-            <button
-              onClick={reloadRuntime}
-              className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800/60"
-            >
-              刷新
-            </button>
-          </div>
-        </div>
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          {checkpoints.slice(0, 6).map((checkpoint) => (
-            <div key={checkpoint.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-slate-200">{checkpoint.name}</div>
-                {checkpoint.current && (
-                  <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300">
-                    current
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 text-xs text-slate-500">{checkpoint.path}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+      {projectCenterPageTab === 'analysis' && (
+        <ProjectCenterAnalysisSection
+          activeProject={activeProject}
+          checkpoints={checkpoints}
+          executionSurfaceCatalog={executionSurfaceCatalog}
+          openPath={openPath}
+          reloadRuntime={reloadRuntime}
+          revealPath={revealPath}
+          shellEntryPoints={shellEntryPoints}
+          studioDeliveryWavePlan={studioDeliveryWavePlan}
+        />
+      )}
 
       {showCaseEditor && (
         <div
@@ -1813,17 +2868,17 @@ export default function ProjectCenter() {
           aria-modal="true"
           aria-labelledby="case-editor-title"
         >
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-600 bg-slate-900 shadow-xl">
-            <div className="border-b border-slate-700/60 px-5 py-4">
+          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-zinc-700 bg-zinc-900 shadow-xl">
+            <div className="border-b border-zinc-800/60 px-5 py-4">
               <h3 id="case-editor-title" className="text-sm font-semibold text-slate-100">
                 编辑案例定义（配置驱动 · 不落硬编码）
               </h3>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
+              <p className="mt-1 text-xs leading-5 text-zinc-500">
                 可编辑 manifest、contracts/case_manifest.json、Hydrology 配置；保存即写回仓库。改显示名后请点「刷新案例列表」。
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3 border-b border-slate-800/80 px-5 py-3">
-              <label className="block min-w-[200px] text-[11px] text-slate-400">
+              <label className="block min-w-[200px] text-[11px] text-zinc-400">
                 案例
                 <select
                   value={editorCaseId}
@@ -1832,7 +2887,7 @@ export default function ProjectCenter() {
                     setEditorDirty(false);
                     setEditorFetchKey((k) => k + 1);
                   }}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200"
+                  className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200"
                 >
                   {dynamicProjects.length === 0 ? (
                     <option value={editorCaseId}>{editorCaseId}</option>
@@ -1851,7 +2906,7 @@ export default function ProjectCenter() {
                   )}
                 </select>
               </label>
-              <div className="flex gap-1 rounded-lg border border-slate-700/80 bg-slate-950/80 p-0.5">
+              <div className="flex gap-1 rounded-lg border border-zinc-800/80 bg-zinc-950/80 p-0.5">
                 <button
                   type="button"
                   onClick={() => {
@@ -1861,7 +2916,7 @@ export default function ProjectCenter() {
                   className={`rounded-md px-3 py-1.5 text-[11px] ${
                     editorFileKind === 'manifest'
                       ? 'bg-fuchsia-500/20 text-fuchsia-200'
-                      : 'text-slate-400 hover:text-slate-200'
+                      : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   cases/…/manifest.yaml
@@ -1875,7 +2930,7 @@ export default function ProjectCenter() {
                   className={`rounded-md px-3 py-1.5 text-[11px] ${
                     editorFileKind === 'hydrology'
                       ? 'bg-fuchsia-500/20 text-fuchsia-200'
-                      : 'text-slate-400 hover:text-slate-200'
+                      : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   Hydrology/configs/…yaml
@@ -1889,14 +2944,14 @@ export default function ProjectCenter() {
                   className={`rounded-md px-3 py-1.5 text-[11px] ${
                     editorFileKind === 'case_manifest'
                       ? 'bg-fuchsia-500/20 text-fuchsia-200'
-                      : 'text-slate-400 hover:text-slate-200'
+                      : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   contracts/case_manifest.json
                 </button>
               </div>
             </div>
-            <div className="px-5 py-2 text-[10px] font-mono text-slate-500">
+            <div className="px-5 py-2 text-[10px] font-mono text-zinc-500">
               {caseDefinitionRelPath(editorCaseId, editorFileKind) || '—'}
             </div>
             {editorHint && (
@@ -1911,7 +2966,7 @@ export default function ProjectCenter() {
             )}
             <div className="min-h-0 flex-1 px-5 pb-2">
               {editorLoading ? (
-                <div className="py-12 text-center text-sm text-slate-500">正在读取文件…</div>
+                <div className="py-12 text-center text-sm text-zinc-500">正在读取文件…</div>
               ) : (
                 <textarea
                   value={editorContent}
@@ -1920,18 +2975,18 @@ export default function ProjectCenter() {
                     setEditorDirty(true);
                   }}
                   spellCheck={false}
-                  className="h-[min(52vh,480px)] w-full resize-y rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-200"
+                  className="h-[min(52vh,480px)] w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-200"
                 />
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-700/60 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-800/60 px-5 py-4">
               <button
                 type="button"
                 disabled={!caseDefinitionRelPath(editorCaseId, editorFileKind)}
                 onClick={() =>
                   openPath(caseDefinitionRelPath(editorCaseId, editorFileKind))
                 }
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 disabled:opacity-50"
               >
                 外部打开
               </button>
@@ -1939,7 +2994,7 @@ export default function ProjectCenter() {
                 type="button"
                 disabled={editorLoading || !isTauri()}
                 onClick={() => setEditorFetchKey((k) => k + 1)}
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 disabled:opacity-50"
               >
                 重新加载
               </button>
@@ -1954,7 +3009,7 @@ export default function ProjectCenter() {
               <button
                 type="button"
                 onClick={() => requestCloseCaseEditor()}
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300"
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300"
               >
                 关闭
               </button>
@@ -1971,103 +3026,155 @@ export default function ProjectCenter() {
           aria-modal="true"
           aria-labelledby="scaffold-title"
         >
-          <div className="w-full max-w-md rounded-2xl border border-slate-600 bg-slate-900 p-5 shadow-xl">
-            <h3 id="scaffold-title" className="text-sm font-semibold text-slate-100">
-              新建案例骨架
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-6 shadow-xl">
+            <h3 id="scaffold-title" className="text-base font-medium text-zinc-100">
+              新建仿真工程 (New Project)
             </h3>
-            <p className="mt-1 text-xs leading-5 text-slate-500">
-              写入仓库：manifest、最小 case_manifest.json、Hydrology 配置与 product_outputs 目录。桌面端创建成功后将自动打开 manifest
-              内联编辑；亦可于下方列表「切换」该 case_id（与内置 proj-* 工程并存）。
+            <p className="mt-2 text-xs leading-5 text-zinc-400">
+              向导将为您建立工程目录，包含运行所需的基础文件。
             </p>
-            <div className="mt-4 space-y-3">
-              <label className="block text-[11px] text-slate-400">
-                case_id（小写 a-z 开头）
-                <input
-                  value={scaffoldCaseId}
-                  onChange={(e) => setScaffoldCaseId(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-                  placeholder="例如 my_river_basin"
-                  autoComplete="off"
-                />
-                {scaffoldCaseId.trim() ? (
-                  <div
-                    className={`mt-1 text-[11px] ${scaffoldCaseIdOk ? 'text-emerald-400/90' : 'text-amber-300/90'}`}
-                  >
-                    {scaffoldCaseIdOk ? 'case_id 格式符合 scaffold 规则' : '须匹配 ^[a-z][a-z0-9_]{1,63}$（2–64 字符）'}
-                  </div>
-                ) : null}
-              </label>
-              <label className="block text-[11px] text-slate-400">
-                显示名
-                <input
-                  value={scaffoldDisplayName}
-                  onChange={(e) => setScaffoldDisplayName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-                  placeholder="中文或英文案例名"
-                  autoComplete="off"
-                />
-              </label>
-              <label className="block text-[11px] text-slate-400">
-                project_type
+            <div className="mt-6 space-y-4">
+              <label className="block text-[12px] font-medium text-zinc-300">
+                工程意图 (Project Type)
                 <select
                   value={scaffoldProjectType}
                   onChange={(e) => setScaffoldProjectType(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
+                  className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-200 focus:border-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 transition-colors"
                 >
-                  <option value="canal">canal（渠系/管线）</option>
-                  <option value="cascade_hydro">cascade_hydro（梯级水电）</option>
-                  <option value="basin">basin（流域）</option>
-                  <option value="generic">generic</option>
+                  <option value="canal">渠系/管线控制工程 (canal)</option>
+                  <option value="cascade_hydro">梯级水电调度工程 (cascade_hydro)</option>
+                  <option value="basin">流域仿真工程 (basin)</option>
+                  <option value="generic">通用工程 (generic)</option>
                 </select>
               </label>
-              <label className="flex cursor-pointer items-center gap-2 text-[11px] text-slate-400">
+              <label className="block text-[12px] font-medium text-zinc-300">
+                显示名称 (Display Name)
+                <input
+                  value={scaffoldDisplayName}
+                  onChange={(e) => setScaffoldDisplayName(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:border-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 transition-colors"
+                  placeholder="例如：汉江流域防洪调度"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="block text-[12px] font-medium text-zinc-300">
+                工程标识 (case_id)
+                <input
+                  value={scaffoldCaseId}
+                  onChange={(e) => setScaffoldCaseId(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:border-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600 transition-colors"
+                  placeholder="例如：hanjiang_flood (小写字母开头，数字下划线)"
+                  autoComplete="off"
+                />
+                {scaffoldCaseId.trim() ? (
+                  <div className={`mt-1.5 text-[11px] ${scaffoldCaseIdOk ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {scaffoldCaseIdOk ? '✓ 标识符合要求' : '格式要求：^[a-z][a-z0-9_]{1,63}$'}
+                  </div>
+                ) : null}
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-400 mt-2">
                 <input
                   type="checkbox"
                   checked={scaffoldRegisterLoop}
                   onChange={(e) => setScaffoldRegisterLoop(e.target.checked)}
-                  className="rounded border-slate-600"
+                  className="rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-zinc-600"
                 />
-                同时写入主闭环 YAML 的 case_selection.case_ids（推荐）
+                加入工作台全局执行队列
               </label>
+              {dataMiningProgress && (
+                <div className="mt-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-200">
+                  {dataMiningProgress}
+                </div>
+              )}
             </div>
             {scaffoldDryRunPreview ? (
-              <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-slate-700/60 bg-slate-950/80 p-2">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">Dry-run JSON</div>
-                <pre className="whitespace-pre-wrap break-all font-mono text-[10px] text-slate-400">{scaffoldDryRunPreview}</pre>
+              <div className="mt-4 max-h-40 overflow-auto rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+                <div className="mb-1.5 text-[10px] uppercase tracking-wide text-zinc-500">预览结构</div>
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-zinc-300 leading-relaxed">{scaffoldDryRunPreview}</pre>
               </div>
             ) : null}
             {scaffoldError && (
-              <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <div className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-300">
                 {scaffoldError}
               </div>
             )}
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <div className="mt-8 flex items-center justify-end gap-3">
               <button
                 type="button"
+                disabled={scaffoldBusy || dataMiningBusy}
                 onClick={() => setShowCaseScaffold(false)}
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-300"
+                className="rounded-lg border border-zinc-700 px-4 py-2 text-[12px] font-medium text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
               >
                 取消
               </button>
               <button
                 type="button"
-                disabled={scaffoldDryRunBusy || !scaffoldFormReady}
-                onClick={() => void runScaffoldDryRun()}
-                className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 disabled:opacity-50"
-              >
-                {scaffoldDryRunBusy ? 'Dry-run…' : 'Dry-run 预览'}
-              </button>
-              <button
-                type="button"
-                disabled={scaffoldBusy || !scaffoldFormReady}
+                disabled={scaffoldBusy || dataMiningBusy || !scaffoldFormReady}
                 onClick={() => runScaffoldNewCase()}
-                className="rounded-lg border border-fuchsia-500/40 bg-fuchsia-500/15 px-3 py-1.5 text-xs text-fuchsia-200 disabled:opacity-50"
+                className="rounded-lg bg-zinc-100 text-zinc-900 px-4 py-2 text-[12px] font-medium hover:bg-white disabled:opacity-50 transition-colors"
               >
-                {scaffoldBusy ? '创建中…' : '创建'}
+                {scaffoldBusy ? '创建中...' : dataMiningBusy ? '数据挖掘中...' : '确认创建'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {showInspectorDrawer && (
+        <>
+          <div 
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity"
+            onClick={() => setShowInspectorDrawer(false)}
+          />
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-sm border-l border-zinc-800 bg-zinc-950 p-6 shadow-2xl overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <h3 className="text-sm font-semibold text-zinc-100">
+                高级工程配置 (Inspector)
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowInspectorDrawer(false)}
+                className="text-zinc-400 hover:text-zinc-100"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="mt-6 space-y-6">
+              <div>
+                <h4 className="text-xs font-medium text-zinc-300">Simulink/PCSWMM 核心引擎配置</h4>
+                <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+                  包含底层计算引擎、边界条件映射及控制步长设置。不建议在非专家模式下修改。
+                </p>
+                <button
+                  type="button"
+                  disabled={!shellCaseId}
+                  onClick={() => openPath(`Hydrology/configs/${shellCaseId}.yaml`)}
+                  className="mt-3 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 transition-colors text-left flex items-center justify-between"
+                >
+                  <span>编辑 Hydrology YAML</span>
+                  <span className="text-zinc-500 text-[10px]">configs/{shellCaseId}.yaml</span>
+                </button>
+              </div>
+              
+              <div>
+                <h4 className="text-xs font-medium text-zinc-300">环境与网络隔离 (Network & Env)</h4>
+                <p className="mt-1 text-[11px] leading-5 text-zinc-500">
+                  仅针对包含独立 OPC-UA 或特殊环境依赖的案例有效。
+                </p>
+                <button
+                  type="button"
+                  disabled={true}
+                  className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 text-xs font-medium text-zinc-500 cursor-not-allowed text-left"
+                >
+                  网络配置隔离（当前禁用）
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

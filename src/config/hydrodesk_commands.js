@@ -7,7 +7,7 @@
  * 请勿在用户输入中拼接未转义片段。
  */
 
-import rolloutGen from './playwrightRollout.generated.json';
+import rolloutGen from './playwrightRollout.generated.json' with { type: 'json' };
 
 const DEFAULT_PYTHON = 'python3';
 const DEFAULT_NL_GATEWAY = 'Hydrology/workflows/nl_mcp_gateway.py';
@@ -16,7 +16,7 @@ const DEFAULT_RUN_CASE_PIPELINE = 'Hydrology/workflows/run_case_pipeline.py';
 const DEFAULT_BUILD_REVIEW_BUNDLE = 'Hydrology/workflows/build_review_bundle.py';
 const DEFAULT_BUILD_RELEASE_MANIFEST = 'Hydrology/workflows/build_release_manifest.py';
 const DEFAULT_HYDRODESK_FUSION_PLAN_DOC = 'HydroDesk/docs/hydrodesk-e2e-fusion-plan.md';
-const DEFAULT_SIX_CASE_E2E_LOOP_SCRIPT = 'Hydrology/scripts/run_hydrodesk_six_case_e2e_loop.py';
+const DEFAULT_ROLLOUT_E2E_LOOP_SCRIPT = 'Hydrology/scripts/run_hydrodesk_rollout_e2e_loop.py';
 const DEFAULT_AUTONOMOUS_WATERNET_E2E_LOOP_CONFIG =
   'Hydrology/configs/hydrodesk_autonomous_waternet_e2e_loop.yaml';
 const DEFAULT_HYDRODESK_AGENT_STACK_CONFIG = 'Hydrology/configs/hydrodesk_agent_stack.json';
@@ -25,6 +25,8 @@ const DEFAULT_AGENT_LOOP_GATEWAY_SCRIPT = 'Hydrology/workflows/agent_loop_gatewa
 const DEFAULT_AGENTIC_IDE_PLATFORM_PLAN_DOC = 'HydroDesk/docs/hydrodesk-agentic-ide-platform-plan.md';
 const DEFAULT_AGENTIC_IDE_ROADMAP_DOC = 'HydroDesk/docs/hydrodesk-agentic-ide-roadmap.md';
 const DEFAULT_SKILL_REGISTRY_YAML = 'Hydrology/configs/skill_registry.yaml';
+const DEFAULT_PLUGIN_REGISTRY_YAML = 'Hydrology/configs/plugin_registry.yaml';
+const DEFAULT_AGENT_REGISTRY_YAML = 'Hydrology/configs/agent_registry.yaml';
 const DEFAULT_EXPORT_AUTONOMOUS_WATERNET_QUALITY_RUBRIC_SCRIPT =
   'Hydrology/scripts/export_autonomous_waternet_quality_rubric.py';
 const DEFAULT_CHECK_CASE_QUALITY_ARTIFACTS_SCRIPT =
@@ -34,14 +36,27 @@ const DEFAULT_EXPORT_CASE_WORKFLOW_FEASIBILITY_SCRIPT =
   'Hydrology/scripts/export_case_workflow_feasibility.py';
 const DEFAULT_EXPORT_CASE_PLATFORM_READINESS_SCRIPT =
   'Hydrology/scripts/export_case_platform_readiness.py';
+const DEFAULT_EXPORT_CASE_MODELING_HINTS_SCRIPT =
+  'Hydrology/scripts/export_case_modeling_hints.py';
+const DEFAULT_EXPORT_CASE_MODEL_STRATEGY_SCRIPT =
+  'Hydrology/scripts/export_case_model_strategy.py';
+const DEFAULT_EXPORT_CASE_DATA_INTELLIGENCE_SCRIPT =
+  'Hydrology/scripts/export_case_data_intelligence.py';
+const DEFAULT_EXPORT_ROLLOUT_READINESS_BASELINE_SCRIPT =
+  'Hydrology/scripts/export_rollout_readiness_baseline.py';
+const DEFAULT_IMPORT_CASE_SOURCEBUNDLE_SCRIPT =
+  'Hydrology/scripts/import_case_sourcebundle.py';
 const DEFAULT_BOOTSTRAP_CASE_TRIAD_MINIMAL_SCRIPT = 'Hydrology/scripts/bootstrap_case_triad_minimal.py';
 const DEFAULT_LINT_CASE_KNOWLEDGE_LINKS_SCRIPT = 'Hydrology/scripts/lint_case_knowledge_links.py';
+const DEFAULT_RUN_GRAPHIFY_CASE_SIDECAR_SCRIPT = 'scripts/run_graphify_case_sidecar.py';
+const DEFAULT_RUN_SOURCE_SYNC_SCRIPT = 'Hydrology/workflows/run_source_sync.py';
 
 /**
- * 与闭环 YAML case_selection 同步的案例 id（见 playwrightRollout.generated.json，由 export_playwright_rollout_registry.py 生成）。
+ * 与闭环 YAML case_selection 同步的 rollout case id（见 playwrightRollout.generated.json，由 export_playwright_rollout_registry.py 生成）。
  * 同文件另有 full_spatial_hydro_evidence_case_ids、default_active_case_id，供 studioState / caseShellPresets 使用。
  */
-export const HYDRODESK_SIX_CASE_WORKFLOW_IDS = Object.freeze([...rolloutGen.case_ids]);
+export const HYDRODESK_ROLLOUT_CASE_IDS = Object.freeze([...rolloutGen.case_ids]);
+export const HYDRODESK_SIX_CASE_WORKFLOW_IDS = HYDRODESK_ROLLOUT_CASE_IDS;
 
 /** POSIX sh 单引号包裹（适用于 Tauri `sh -lc`）。 */
 export function shellSingleQuote(s) {
@@ -71,6 +86,10 @@ export function getBuildReviewBundleScriptRelPath() {
 
 export function getBuildReleaseManifestScriptRelPath() {
   return import.meta.env?.VITE_BUILD_RELEASE_MANIFEST_SCRIPT || DEFAULT_BUILD_RELEASE_MANIFEST;
+}
+
+export function getImportCaseSourcebundleScriptRelPath() {
+  return import.meta.env?.VITE_IMPORT_CASE_SOURCEBUNDLE_SCRIPT || DEFAULT_IMPORT_CASE_SOURCEBUNDLE_SCRIPT;
 }
 
 /** HydroDesk 融合计划文档（相对仓库根） */
@@ -115,16 +134,49 @@ export function getSkillRegistryYamlRelPath() {
   return import.meta.env?.VITE_SKILL_REGISTRY_YAML || DEFAULT_SKILL_REGISTRY_YAML;
 }
 
+/** Plugins 注册表（Phase 3，相对仓库根） */
+export function getPluginRegistryYamlRelPath() {
+  return import.meta.env?.VITE_PLUGIN_REGISTRY_YAML || DEFAULT_PLUGIN_REGISTRY_YAML;
+}
+
+/** 20 Agent 注册表（相对仓库根） */
+export function getAgentRegistryYamlRelPath() {
+  return import.meta.env?.VITE_AGENT_REGISTRY_YAML || DEFAULT_AGENT_REGISTRY_YAML;
+}
+
+export function getRunGraphifyCaseSidecarScriptRelPath() {
+  return import.meta.env?.VITE_RUN_GRAPHIFY_CASE_SIDECAR_SCRIPT || DEFAULT_RUN_GRAPHIFY_CASE_SIDECAR_SCRIPT;
+}
+
+export function getRunSourceSyncScriptRelPath() {
+  return import.meta.env?.VITE_RUN_SOURCE_SYNC_SCRIPT || DEFAULT_RUN_SOURCE_SYNC_SCRIPT;
+}
+
+export function getExportCaseDataIntelligenceScriptRelPath() {
+  return (
+    import.meta.env?.VITE_EXPORT_CASE_DATA_INTELLIGENCE_SCRIPT ||
+    DEFAULT_EXPORT_CASE_DATA_INTELLIGENCE_SCRIPT
+  );
+}
+
+export function getHydrodeskRolloutE2eLoopScriptRelPath() {
+  return import.meta.env?.VITE_HYDRODESK_SIX_CASE_E2E_LOOP_SCRIPT || DEFAULT_ROLLOUT_E2E_LOOP_SCRIPT;
+}
+
 export function getHydrodeskSixCaseE2eLoopScriptRelPath() {
-  return import.meta.env?.VITE_HYDRODESK_SIX_CASE_E2E_LOOP_SCRIPT || DEFAULT_SIX_CASE_E2E_LOOP_SCRIPT;
+  return getHydrodeskRolloutE2eLoopScriptRelPath();
 }
 
 /**
  * 端到端闭环编排（dry-run / --list-cases / 实跑）；cwd 为仓库根。默认读 autonomous 主配置。
- * @param {string[]} argv 如 --dry-run、--case-id daduhe、--config Hydrology/configs/hydrodesk_six_case_e2e_loop.yaml
+ * @param {string[]} argv 如 --dry-run、--case-id <case_id>、--config Hydrology/configs/hydrodesk_autonomous_waternet_e2e_loop.yaml
  */
+export function buildHydrodeskRolloutE2eLoopCommand(argv = []) {
+  return buildPythonScriptCommand(getHydrodeskRolloutE2eLoopScriptRelPath(), argv);
+}
+
 export function buildHydrodeskSixCaseE2eLoopCommand(argv = []) {
-  return buildPythonScriptCommand(getHydrodeskSixCaseE2eLoopScriptRelPath(), argv);
+  return buildHydrodeskRolloutE2eLoopCommand(argv);
 }
 
 export function getExportAutonomousWaternetQualityRubricScriptRelPath() {
@@ -259,6 +311,27 @@ export function getExportCasePlatformReadinessScriptRelPath() {
   );
 }
 
+export function getExportCaseModelingHintsScriptRelPath() {
+  return (
+    import.meta.env?.VITE_EXPORT_CASE_MODELING_HINTS_SCRIPT ||
+    DEFAULT_EXPORT_CASE_MODELING_HINTS_SCRIPT
+  );
+}
+
+export function getExportCaseModelStrategyScriptRelPath() {
+  return (
+    import.meta.env?.VITE_EXPORT_CASE_MODEL_STRATEGY_SCRIPT ||
+    DEFAULT_EXPORT_CASE_MODEL_STRATEGY_SCRIPT
+  );
+}
+
+export function getExportRolloutReadinessBaselineScriptRelPath() {
+  return (
+    import.meta.env?.VITE_EXPORT_ROLLOUT_READINESS_BASELINE_SCRIPT ||
+    DEFAULT_EXPORT_ROLLOUT_READINESS_BASELINE_SCRIPT
+  );
+}
+
 export function getBootstrapCaseTriadMinimalScriptRelPath() {
   return (
     import.meta.env?.VITE_BOOTSTRAP_CASE_TRIAD_MINIMAL_SCRIPT ||
@@ -268,10 +341,26 @@ export function getBootstrapCaseTriadMinimalScriptRelPath() {
 
 /**
  * 为缺 triad 的案例写入最小占位 JSON（`--apply` 才写入；默认与 dry-run 一致需自行传参）。
- * @param {string[]} argv 如 ['--apply','--from-loop'] 或 ['--apply','--case-id','yjdt']
+ * @param {string[]} argv 如 ['--apply','--from-loop'] 或 ['--apply','--case-id','<case_id>']
  */
 export function buildBootstrapCaseTriadMinimalCommand(argv = []) {
   return buildPythonScriptCommand(getBootstrapCaseTriadMinimalScriptRelPath(), argv);
+}
+
+export function buildRunGraphifyCaseSidecarCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getRunGraphifyCaseSidecarScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    ...argv,
+  ]);
+}
+
+export function buildRunSourceSyncCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getRunSourceSyncScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    ...argv,
+  ]);
 }
 
 export function getLintCaseKnowledgeLinksScriptRelPath() {
@@ -299,6 +388,70 @@ export function buildExportCasePlatformReadinessCommand(caseId, argv = []) {
   ]);
 }
 
+/** 当前案例：基于现有真相判断“现在该建什么模型”。 */
+export function buildExportCaseModelStrategyCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getExportCaseModelStrategyScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    ...argv,
+  ]);
+}
+
+/** 批量：配置内全部案例的模型判型。 */
+export function buildExportCaseModelStrategyBatchCommand(argv = []) {
+  return buildPythonScriptCommand(getExportCaseModelStrategyScriptRelPath(), [
+    '--batch',
+    '--config',
+    getAutonomousWaternetE2eLoopConfigRelPath(),
+    ...argv,
+  ]);
+}
+
+/** 批量：rollout readiness baseline（`--stdout` 时返回完整 JSON）。 */
+export function buildExportRolloutReadinessBaselineCommand(argv = []) {
+  return buildPythonScriptCommand(getExportRolloutReadinessBaselineScriptRelPath(), [
+    '--config',
+    getAutonomousWaternetE2eLoopConfigRelPath(),
+    ...argv,
+  ]);
+}
+
+export function buildExportCaseModelingHintsCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getExportCaseModelingHintsScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    ...argv,
+  ]);
+}
+
+/** 当前案例：统一资产画像 + 真实性风险 + 双向工作流规划 + 改模建议。 */
+export function buildExportCaseDataIntelligenceCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getExportCaseDataIntelligenceScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    '--write-latest',
+    ...argv,
+  ]);
+}
+
+/** 批量：主闭环 YAML 六案例的数据智能规划摘要。 */
+export function buildExportCaseDataIntelligenceBatchCommand(argv = []) {
+  return buildPythonScriptCommand(getExportCaseDataIntelligenceScriptRelPath(), [
+    '--config',
+    getAutonomousWaternetE2eLoopConfigRelPath(),
+    '--write-latest',
+    ...argv,
+  ]);
+}
+
+export function buildImportCaseSourcebundleCommand(caseId, argv = []) {
+  return buildPythonScriptCommand(getImportCaseSourcebundleScriptRelPath(), [
+    '--case-id',
+    String(caseId),
+    ...argv,
+  ]);
+}
+
 /**
  * `python <scriptRelPath>` + argv，每项经 `shellSingleQuote`（Tauri `sh -lc`）。
  * @param {string} scriptRelPath
@@ -312,6 +465,31 @@ export function buildPythonScriptCommand(scriptRelPath, argv = []) {
 }
 
 /**
+ * workspace 级 rg 搜索命令构造器：统一参数转义，避免页面内联 shell 拼接。
+ * @param {{ query: string, targets: string[], flags?: string[] }} options
+ */
+export function buildWorkspaceRgSearchCommand(options = {}) {
+  const { query, targets = [], flags = [] } = options;
+  const rawQuery = String(query ?? '');
+  if (!rawQuery.trim()) {
+    throw new Error('workspace rg search: empty query');
+  }
+
+  const normalizedTargets = targets.map((target) => String(target ?? '').trim()).filter(Boolean);
+  if (normalizedTargets.length === 0) {
+    throw new Error('workspace rg search: missing targets');
+  }
+
+  const normalizedFlags = flags.map((flag) => String(flag ?? '').trim()).filter(Boolean);
+  return [
+    'rg',
+    ...normalizedFlags.map((flag) => shellSingleQuote(flag)),
+    shellSingleQuote(rawQuery),
+    ...normalizedTargets.map((target) => shellSingleQuote(target)),
+  ].join(' ');
+}
+
+/**
  * `run_case_pipeline.py --case-id <caseId>` + 额外 argv。
  * @param {string} caseId
  * @param {string[]} argv
@@ -322,6 +500,10 @@ export function buildRunCasePipelineCommand(caseId, argv = []) {
     String(caseId),
     ...argv,
   ]);
+}
+
+export function buildRunCasePipelinePreflightCommand(caseId, phase = 'simulation', argv = []) {
+  return buildRunCasePipelineCommand(caseId, ['--phase', String(phase), '--dry-run', ...argv]);
 }
 
 /**

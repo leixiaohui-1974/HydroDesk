@@ -3,6 +3,7 @@ import { getRunningTasks, studioState } from '../data/studioState';
 
 export default function ActivityDock({ view }) {
   const runningTasks = getRunningTasks();
+  const collapseByDefault = ['/projects', '/review', '/monitor'].includes(view.path);
   const runtimeSummary = [
     { label: '当前任务', value: runningTasks[0]?.workflow || studioState.tasks[0]?.workflow },
     { label: '运行后端', value: runningTasks[0]?.backend || studioState.tasks[0]?.backend },
@@ -10,8 +11,19 @@ export default function ActivityDock({ view }) {
   ];
 
   return (
-    <div className="border-t border-slate-700/50 bg-slate-900/85 backdrop-blur-sm">
-      <div className="grid grid-cols-3 gap-0">
+    <details className="border-t border-slate-700/50 bg-slate-900/85 backdrop-blur-sm" open={!collapseByDefault}>
+      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-2 text-xs text-slate-400">
+        <div className="flex items-center gap-3">
+          <span>活动抽屉</span>
+          <span className="text-[10px] text-slate-500">{view.label}</span>
+          <span className="text-[10px] text-slate-500">事件 {studioState.events.length}</span>
+          <span className="text-[10px] text-slate-500">产物 {studioState.artifacts.length}</span>
+        </div>
+        <span className="text-[10px] text-slate-500">
+          {collapseByDefault ? '默认折叠' : '展开中'}
+        </span>
+      </summary>
+      <div className="grid grid-cols-3 gap-0 border-t border-slate-700/50">
         <section className="border-r border-slate-700/50 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-slate-200">事件流</h3>
@@ -60,6 +72,6 @@ export default function ActivityDock({ view }) {
           </div>
         </section>
       </div>
-    </div>
+    </details>
   );
 }

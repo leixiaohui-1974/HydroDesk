@@ -3,156 +3,62 @@ import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 import { studioState } from '../data/studioState';
 import useTauri from '../hooks/useTauri';
 import { useHydrodeskAgentStack } from '../hooks/useHydrodeskAgentStack';
+import { useHydrodeskPluginRegistry } from '../hooks/useHydrodeskPluginRegistry';
 import { useHydrodeskSkillRegistry } from '../hooks/useHydrodeskSkillRegistry';
 import {
   CLAUDECODE_DIR,
-  CLAUDECODE_OFFICIAL_PLUGINS,
-  CLAUDECODE_OFFICIAL_ROOT,
-  CLAUDECODE_SOURCEMAP_SRC,
-  CLAW_CODE_ROOT,
-  getClaudecodeLineageDocRelPath,
 } from '../config/claudecodeReference';
-import {
-  getHydrodeskAgenticIdePlatformPlanRelPath,
-  getHydrodeskAgenticIdeRoadmapRelPath,
-  getSkillRegistryYamlRelPath,
-} from '../config/hydrodesk_commands';
 import { openPath, revealPath } from '../api/tauri_bridge';
+import {
+  architectureLayers,
+  caseProjectPrinciples,
+  extensionGroups,
+  extensionReferenceEntries,
+  extensionStatusClass,
+  extensionWorkspaceEntries,
+  hostMatrix,
+  implementationPhases,
+  roleSegments,
+} from '../data/extensionsCatalog';
 
-const extensionGroups = [
-  {
-    title: 'Agent Packs',
-    items: [
-      { name: 'official.designer.agent', version: '0.1.0', status: 'enabled' },
-      { name: 'official.dispatch.agent', version: '0.1.0', status: 'enabled' },
-    ],
-  },
-  {
-    title: 'Skill Packs',
-    items: [
-      { name: 'official.gis.validation', version: '0.1.0', status: 'enabled' },
-      { name: 'team.review.bundle', version: '0.0.3', status: 'draft' },
-    ],
-  },
-  {
-    title: 'Workflow Packs',
-    items: [
-      { name: 'official.run_watershed_delineation', version: '1.0.0', status: 'enabled' },
-      { name: 'official.generate_review_bundle', version: '1.0.0', status: 'enabled' },
-    ],
-  },
-];
+function ExtensionsActionButton({ children, className = '', ...props }) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={`rounded-lg border px-3 py-1.5 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
 
-const statusClass = {
-  enabled: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  draft: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-};
-
-const hostMatrix = [
-  { title: 'Codex / Max', detail: '用于高级编码、补全与对话式开发入口。', state: '可配置' },
-  { title: 'VS Code 插件', detail: '用于承接熟悉的开发体验与编辑器生态。', state: '宿主预留' },
-  { title: 'MCP Server', detail: '用于承接工具、资源、Prompt 与执行桥接。', state: '已接入' },
-];
-
-const architectureLayers = [
-  {
-    key: 'workspace',
-    title: 'Layer 0 · Workspace & Case',
-    summary: '桌面壳、case=project、工作面路由与 Agent Runtime 状态；平台方案与路线图在此层落地入口。',
-    hydrodeskPath: 'HydroDesk AgentRuntimeStatusPanel / StudioWorkspaceContext',
-    referencePath: getHydrodeskAgenticIdePlatformPlanRelPath(),
-    status: '进行中',
-  },
-  {
-    key: 'mcp',
-    title: 'Layer 1 · MCP Servers',
-    summary: '给 AI 装上手，负责文件、命令、搜索、系统调用和外部桥接。',
-    hydrodeskPath: 'Hydrology/mcp_server.py + HydroDesk tauri_bridge / main.rs',
-    referencePath: CLAUDECODE_SOURCEMAP_SRC,
-    status: '已接线',
-  },
-  {
-    key: 'skills',
-    title: 'Layer 2 · Skills',
-    summary: '给 AI 注入做事方法，承接规划、审查、调试、测试与上下文策略。',
-    hydrodeskPath: '.cursor/rules + contracts/README + shell knowledge lint',
-    referencePath: `${CLAUDECODE_OFFICIAL_ROOT}/plugins`,
-    status: '部分到位',
-  },
-  {
-    key: 'plugins',
-    title: 'Layer 3 · Plugins',
-    summary: '扩展宿主能力，把 case shell、页面入口、命令工厂和桌面壳功能插件化。',
-    hydrodeskPath: 'HydroDesk studioViews / Extensions / Tauri commands',
-    referencePath: CLAUDECODE_OFFICIAL_PLUGINS,
-    status: '在产品化',
-  },
-  {
-    key: 'subagents',
-    title: 'Layer 4 · Subagents',
-    summary: '多角色分工与协同，把工程师、审查员、调度员、签发者拆成独立能力面。',
-    hydrodeskPath: 'studioState.roleAgents + Hydrology/configs/agent_registry.yaml',
-    referencePath: CLAW_CODE_ROOT,
-    status: '已起壳',
-  },
-];
-
-const caseProjectPrinciples = [
-  '每个 case 都是一个 project，不是一次性脚本目录。',
-  'HydroDesk 是统一 IDE 壳，但不同角色看到的工作面、动作和结果模板不同。',
-  'Hydrology 负责确定性 workflow 与 outcome contract，HydroDesk 负责项目中控、Agent 交互和审查签发。',
-  'ClaudeCode 谱系主要作为工程方法参考，不是简单搬运 UI。',
-];
-
-const roleSegments = [
-  {
-    key: 'research',
-    title: '科研人员',
-    focus: '机理算法、数据同化、误差矩阵、率定与实验可追溯',
-    surfaces: ['Agent', 'Notebook', 'Terminal'],
-  },
-  {
-    key: 'design',
-    title: '设计人员',
-    focus: '工况方案、地形断面、图纸与工程可行性',
-    surfaces: ['Project', 'Notebook', 'Review'],
-  },
-  {
-    key: 'operations',
-    title: '运行人员',
-    focus: '预报、调度排期、报警流、MPC 与安全响应',
-    surfaces: ['Agent', 'Monitor', 'Review'],
-  },
-  {
-    key: 'education',
-    title: '教育/学习者',
-    focus: '引导式推演、步骤沙盘、知识壳与对标验证',
-    surfaces: ['Notebook', 'Agent', 'Workbench'],
-  },
-];
-
-const implementationPhases = [
-  {
-    key: 'phase1',
-    title: 'Phase 1 · Agent Loop 驻留与桥接',
-    items: ['挂接 claw-code / claudecode 后端通道', 'Agent Workspace 流式回显与工具调用状态', 'Scaffold / Manifest / Lint 首批 MCP 化'],
-  },
-  {
-    key: 'phase2',
-    title: 'Phase 2 · 角色 Context 与工程基因',
-    items: ['把角色视角、manifest 基因、case summary 注入会话', 'Skill 按角色/行业动态装配', '让 case = project 形成统一模板层'],
-  },
-  {
-    key: 'phase3',
-    title: 'Phase 3 · 20 位涉水专家并行编排',
-    items: ['打通 agent_registry.yaml 与子代理目录', '支持多人格会商、任务拆解、并发协同', '把 review / signoff 汇总给 Manager Agent'],
-  },
-];
+function ExtensionsActionGroup({ title, summary, defaultOpen = false, children }) {
+  return (
+    <details open={defaultOpen} className="rounded-xl border border-slate-700/50 bg-slate-950/35">
+      <summary className="cursor-pointer list-none px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-medium text-slate-200">{title}</div>
+            <div className="mt-1 text-[10px] leading-4 text-slate-500">{summary}</div>
+          </div>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-400">
+            展开
+          </span>
+        </div>
+      </summary>
+      <div className="border-t border-slate-800/70 px-4 py-3">
+        <div className="flex flex-wrap gap-2">{children}</div>
+      </div>
+    </details>
+  );
+}
 
 export default function Extensions() {
   const { activeMode, activeProject } = useStudioWorkspace();
   const { openFile } = useTauri();
   const { stack: agentStack, configSource, loadError, reload } = useHydrodeskAgentStack();
+  const referencePathByKey = Object.fromEntries(extensionReferenceEntries.map((entry) => [entry.key, entry.path]));
   const {
     summary: skillRegSummary,
     loadError: skillRegError,
@@ -160,10 +66,21 @@ export default function Extensions() {
     reload: reloadSkillReg,
     registryRelPath,
   } = useHydrodeskSkillRegistry();
+  const {
+    summary: pluginRegSummary,
+    loadError: pluginRegError,
+    loading: pluginRegLoading,
+    reload: reloadPluginReg,
+    registryRelPath: pluginRegistryRelPath,
+  } = useHydrodeskPluginRegistry();
 
   useEffect(() => {
     void reloadSkillReg();
   }, [reloadSkillReg]);
+
+  useEffect(() => {
+    void reloadPluginReg();
+  }, [reloadPluginReg]);
 
   async function handleImportManifest() {
     const picked = await openFile({
@@ -177,28 +94,159 @@ export default function Extensions() {
     }
     window.alert(`已选择扩展清单：\n${picked}`);
   }
+  const extensionsPrimaryActions = [
+    {
+      key: 'validate-schema',
+      label: '校验 schema',
+      onClick: () => window.alert('Schema 校验入口保留，后续将接入真实校验链路。'),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'import-manifest',
+      label: '导入清单',
+      onClick: handleImportManifest,
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'new-extension',
+      label: '新建扩展',
+      onClick: () => window.alert('新建扩展入口保留，后续将接入模板化 scaffold。'),
+      className: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300 hover:bg-hydro-500/15',
+    },
+  ];
+  const extensionsRegistryActions = [
+    {
+      key: 'reload-stack',
+      label: '重载 Agent Stack',
+      onClick: () => reload(),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'reload-skills',
+      label: skillRegLoading ? '读取 Skills…' : '刷新 Skills 摘要',
+      disabled: skillRegLoading,
+      onClick: () => void reloadSkillReg(),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'reload-plugins',
+      label: pluginRegLoading ? '读取 Plugins…' : '刷新 Plugins 摘要',
+      disabled: pluginRegLoading,
+      onClick: () => void reloadPluginReg(),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+  ];
+  const extensionsReferenceActions = [
+    {
+      key: 'lineage',
+      label: '打开谱系文档',
+      onClick: () => openPath(referencePathByKey['lineage-doc']),
+      className: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    },
+    {
+      key: 'platform-plan',
+      label: '平台方案',
+      onClick: () => openPath(referencePathByKey['platform-plan']),
+      className: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
+    },
+    {
+      key: 'roadmap',
+      label: 'Agentic 路线图',
+      onClick: () => openPath(referencePathByKey.roadmap),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'claudecode-dir',
+      label: '定位 claudecode/',
+      onClick: () => revealPath(CLAUDECODE_DIR),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+    {
+      key: 'skill-registry',
+      label: '打开 Skill Registry',
+      onClick: () => openPath(referencePathByKey['skill-registry']),
+      className: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
+    },
+    {
+      key: 'plugin-registry',
+      label: '打开 Plugin Registry',
+      onClick: () => openPath(referencePathByKey['plugin-registry']),
+      className: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
+    },
+  ];
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">扩展中心</h1>
-          <p className="mt-1 text-sm text-slate-400">统一管理 agent、skill、MCP、模型算法与 workflow 的注册、启停与校验</p>
+          <p className="mt-1 text-sm text-slate-400">统一管理 agent、skill、plugin、MCP 与 workflow 的注册、校验和参考入口</p>
           <div className="mt-3 inline-flex rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-xs text-hydro-300">
             {activeMode === 'development' ? '开发模式已开放扩展宿主与打包入口' : '发布模式下该入口默认收起'}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300">校验 schema</button>
-          <button
-            onClick={handleImportManifest}
-            className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300"
-          >
-            导入清单
-          </button>
-          <button className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300">新建扩展</button>
+          <span className="rounded-full border border-violet-500/25 bg-violet-500/10 px-3 py-1 text-xs text-violet-200">
+            Developer Surface
+          </span>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
+            case {activeProject.caseId}
+          </span>
         </div>
       </div>
+
+      <section className="rounded-2xl border border-slate-700/50 bg-slate-900/40 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">扩展动作中心</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              第一屏只保留扩展治理的高频动作、注册表刷新和参考入口；架构说明与 catalog 信息继续保留在下方正文区。
+            </p>
+          </div>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
+            功能全保留 · 入口重组
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 xl:grid-cols-3">
+          <ExtensionsActionGroup
+            title="主操作"
+            summary="扩展清单导入、schema 校验和新建入口保留在第一屏。"
+            defaultOpen
+          >
+            {extensionsPrimaryActions.map((action) => (
+              <ExtensionsActionButton key={action.key} onClick={action.onClick} className={action.className}>
+                {action.label}
+              </ExtensionsActionButton>
+            ))}
+          </ExtensionsActionGroup>
+          <ExtensionsActionGroup
+            title="注册表与运行态"
+            summary="Agent Stack、Skills、Plugins 的读取与刷新集中在这里。"
+            defaultOpen
+          >
+            {extensionsRegistryActions.map((action) => (
+              <ExtensionsActionButton
+                key={action.key}
+                disabled={action.disabled}
+                onClick={action.onClick}
+                className={action.className}
+              >
+                {action.label}
+              </ExtensionsActionButton>
+            ))}
+          </ExtensionsActionGroup>
+          <ExtensionsActionGroup
+            title="参考入口"
+            summary="低频但重要的谱系、方案、路线图和注册表文件入口统一后置。"
+          >
+            {extensionsReferenceActions.map((action) => (
+              <ExtensionsActionButton key={action.key} onClick={action.onClick} className={action.className}>
+                {action.label}
+              </ExtensionsActionButton>
+            ))}
+          </ExtensionsActionGroup>
+        </div>
+      </section>
 
       <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
         <div className="flex items-center justify-between gap-4">
@@ -212,38 +260,9 @@ export default function Extensions() {
               {loadError ? ` · load error: ${loadError}` : ''}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => reload()}
-              className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300"
-            >
-              重载 Agent Stack
-            </button>
-            <button
-              onClick={() => openPath(getClaudecodeLineageDocRelPath())}
-              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
-            >
-              打开谱系文档
-            </button>
-            <button
-              onClick={() => openPath(getHydrodeskAgenticIdePlatformPlanRelPath())}
-              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
-            >
-              平台方案
-            </button>
-            <button
-              onClick={() => openPath(getHydrodeskAgenticIdeRoadmapRelPath())}
-              className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300"
-            >
-              Agentic 路线图
-            </button>
-            <button
-              onClick={() => revealPath(CLAUDECODE_DIR)}
-              className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300"
-            >
-              定位 claudecode/
-            </button>
-          </div>
+          <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-400">
+            主入口已收纳到扩展动作中心
+          </span>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3">
@@ -290,30 +309,31 @@ export default function Extensions() {
             ) : null}
             {skillRegError ? <div className="mt-2 text-[11px] text-amber-300/90">{skillRegError}</div> : null}
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={skillRegLoading}
-              onClick={() => void reloadSkillReg()}
-              className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300 disabled:opacity-50"
-            >
-              {skillRegLoading ? '读取中…' : '刷新摘要'}
-            </button>
-            <button
-              type="button"
-              onClick={() => openPath(getSkillRegistryYamlRelPath())}
-              className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
-            >
-              打开
-            </button>
-            <button
-              type="button"
-              onClick={() => revealPath(getSkillRegistryYamlRelPath())}
-              className="rounded-lg border border-slate-700/50 px-3 py-2 text-xs text-slate-300"
-            >
-              定位
-            </button>
+          <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-400">
+            注册表操作已收纳到扩展动作中心
+          </span>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-200">Plugin Registry（Phase 3）</div>
+            <div className="mt-1 text-xs text-slate-500">
+              对齐平台方案与运行态挂载视图的插件注册表；先把 ProjectCenter / ReviewDelivery / AgentWorkspace / Extensions 收口成真实条目。
+            </div>
+            <div className="mt-2 font-mono text-[11px] text-slate-600">{pluginRegistryRelPath}</div>
+            {pluginRegSummary ? (
+              <div className="mt-2 text-[11px] text-slate-400">
+                已读摘要 · version {pluginRegSummary.version} · plugins 条目 {pluginRegSummary.pluginCount} · enabled{' '}
+                {pluginRegSummary.enabledCount} · 高权限 {pluginRegSummary.highPermissionCount}
+              </div>
+            ) : null}
+            {pluginRegError ? <div className="mt-2 text-[11px] text-amber-300/90">{pluginRegError}</div> : null}
           </div>
+          <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-400">
+            注册表操作已收纳到扩展动作中心
+          </span>
         </div>
       </div>
 
@@ -337,12 +357,7 @@ export default function Extensions() {
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
           <div className="text-sm font-semibold text-slate-200">参考入口</div>
           <div className="mt-4 space-y-3">
-            {[
-              { label: 'Sourcemap Restored Src', path: CLAUDECODE_SOURCEMAP_SRC },
-              { label: 'Official Plugins', path: CLAUDECODE_OFFICIAL_PLUGINS },
-              { label: 'Official Root', path: CLAUDECODE_OFFICIAL_ROOT },
-              { label: 'Claw / Harness', path: CLAW_CODE_ROOT },
-            ].map((entry) => (
+            {extensionWorkspaceEntries.map((entry) => (
               <div key={entry.path} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
                 <div className="text-sm text-slate-200">{entry.label}</div>
                 <div className="mt-1 text-[11px] text-slate-500">{entry.path}</div>
@@ -446,15 +461,17 @@ export default function Extensions() {
       <div className="grid grid-cols-3 gap-4">
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="text-xs text-slate-500">已注册扩展</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-100">18</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-100">{pluginRegSummary?.pluginCount ?? '—'}</div>
         </div>
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="text-xs text-slate-500">待校验</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-100">3</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-100">
+            {pluginRegSummary ? Math.max((pluginRegSummary.pluginCount || 0) - (pluginRegSummary.enabledCount || 0), 0) : '—'}
+          </div>
         </div>
         <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="text-xs text-slate-500">高权限扩展</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-100">2</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-100">{pluginRegSummary?.highPermissionCount ?? '—'}</div>
         </div>
       </div>
 
@@ -489,7 +506,7 @@ export default function Extensions() {
                   <div className="text-sm text-slate-200">{item.name}</div>
                   <div className="mt-1 text-xs text-slate-500">版本 {item.version}</div>
                   <div className="mt-3 flex items-center justify-between">
-                    <span className={`rounded-full border px-2 py-1 text-[10px] ${statusClass[item.status]}`}>
+                    <span className={`rounded-full border px-2 py-1 text-[10px] ${extensionStatusClass[item.status]}`}>
                       {item.status === 'enabled' ? '已启用' : '草稿'}
                     </span>
                     <button className="text-xs text-hydro-300">详情</button>

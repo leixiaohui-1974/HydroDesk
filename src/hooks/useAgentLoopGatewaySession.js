@@ -4,10 +4,11 @@ import {
   agentLoopGatewaySessionStart,
   agentLoopGatewaySessionStatus,
   agentLoopGatewaySessionStop,
+  hasPlaywrightBrowserFixture,
   isTauri,
 } from '../api/tauri_bridge';
 
-const MAX_LINES = 36;
+const MAX_LINES = 96;
 const MAX_STDERR = 12;
 
 /**
@@ -21,9 +22,11 @@ export function useAgentLoopGatewaySession() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const unsubRef = useRef([]);
+  const isStoppingRef = useRef(false);
+  const desktopLike = isTauri() || hasPlaywrightBrowserFixture();
 
   const refreshStatus = useCallback(async () => {
-    if (!isTauri()) return;
+    if (!desktopLike) return;
     try {
       const s = await agentLoopGatewaySessionStatus();
       setSessionActive(Boolean(s?.active));
@@ -32,10 +35,10 @@ export function useAgentLoopGatewaySession() {
       setSessionActive(false);
       setPid(null);
     }
-  }, []);
+  }, [desktopLike]);
 
   useEffect(() => {
-    if (!isTauri()) return undefined;
+    if (!desktopLike) return undefined;
     let alive = true;
     unsubRef.current = [];
     void (async () => {
@@ -50,6 +53,9 @@ export function useAgentLoopGatewaySession() {
           setSessionActive(false);
           setPid(null);
         }
+      }
+      if (!isTauri()) {
+        return;
       }
       const { listen } = await import('@tauri-apps/api/event');
       const reg = async (event, handler) => {
@@ -68,9 +74,14 @@ export function useAgentLoopGatewaySession() {
         const t = typeof e.payload === 'string' ? e.payload : JSON.stringify(e.payload);
         setStderrLines((prev) => [...prev.slice(-(MAX_STDERR - 1)), t]);
       });
-      await reg('agent-loop-gateway-session-ended', () => {
+      await reg('agent-loop-gateway-session-ended', (e) => {
         setSessionActive(false);
         setPid(null);
+        if (!isStoppingRef.current) {
+          const reason = e.payload?.reason || 'unknown';
+          setError(`Gateway session ended unexpectedly. Reason: ${reason}`);
+        }
+        isStoppingRef.current = false;
       });
     })();
     return () => {
@@ -78,15 +89,16 @@ export function useAgentLoopGatewaySession() {
       unsubRef.current.forEach((u) => u());
       unsubRef.current = [];
     };
-  }, []);
+  }, [desktopLike]);
 
   const start = useCallback(async () => {
-    if (!isTauri()) {
+    if (!desktopLike) {
       setError('仅桌面端可启动常驻网关');
       return;
     }
     setBusy(true);
     setError('');
+    isStoppingRef.current = false;
     try {
       const s = await agentLoopGatewaySessionStart();
       setSessionActive(Boolean(s?.active));
@@ -96,25 +108,26 @@ export function useAgentLoopGatewaySession() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [desktopLike]);
 
   const stop = useCallback(async () => {
-    if (!isTauri()) return;
+    if (!desktopLike) return;
     setBusy(true);
     setError('');
+    isStoppingRef.current = true;
     try {
-      await agentLoopGatewaySessionStop();
-      setSessionActive(false);
-      setPid(null);
+      const result = await agentLoopGatewaySessionStop();
+      setSessionActive(Boolean(result?.active));
+      setPid(result?.pid ?? null);
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [desktopLike]);
 
   const sendLine = useCallback(async (line) => {
-    if (!isTauri()) {
+    if (!desktopLike) {
       setError('仅桌面端可发送');
       return;
     }
@@ -125,11 +138,23 @@ export function useAgentLoopGatewaySession() {
     }
     setError('');
     try {
-      await agentLoopGatewaySessionSend(one);
+      const result = await agentLoopGatewaySessionSend(one);
+      if (typeof result?.line === 'string' && result.line.trim()) {
+        setLines((prev) => [...prev.slice(-(MAX_LINES - 1)), result.line]);
+      }
+      if (typeof result?.stderr === 'string' && result.stderr.trim()) {
+        setStderrLines((prev) => [...prev.slice(-(MAX_STDERR - 1)), result.stderr]);
+      }
+      if (typeof result?.active === 'boolean') {
+        setSessionActive(result.active);
+      }
+      if (Object.prototype.hasOwnProperty.call(result ?? {}, 'pid')) {
+        setPid(result?.pid ?? null);
+      }
     } catch (e) {
       setError(e?.message || String(e));
     }
-  }, []);
+  }, [desktopLike]);
 
   const sendPing = useCallback(() => void sendLine(JSON.stringify({ op: 'ping' })), [sendLine]);
 
@@ -163,6 +188,6 @@ export function useAgentLoopGatewaySession() {
     sendListTools,
     clearLog,
     refreshStatus,
-    isTauriDesktop: isTauri(),
+    isTauriDesktop: desktopLike,
   };
 }

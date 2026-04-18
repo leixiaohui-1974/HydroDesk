@@ -49,6 +49,26 @@ export default function useTauri() {
   }, [isTauriEnv]);
 
   /**
+   * Open a directory dialog and return the selected absolute path
+   * @param {object} options - Dialog options
+   * @returns {Promise<string|null>}
+   */
+  const openDirectory = useCallback(async (options = {}) => {
+    if (!isTauriEnv) {
+      return null;
+    }
+
+    const { open } = await import('@tauri-apps/api/dialog');
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: options.defaultPath,
+      title: options.title || '选择目录',
+    });
+    return Array.isArray(selected) ? selected[0] || null : selected;
+  }, [isTauriEnv]);
+
+  /**
    * Open a save file dialog
    * @param {object} options - Dialog options
    * @returns {Promise<string|null>}
@@ -155,6 +175,7 @@ export default function useTauri() {
   return {
     isTauri: isTauriEnv,
     openFile,
+    openDirectory,
     saveFile,
     readFile,
     writeFile,

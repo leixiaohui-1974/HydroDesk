@@ -26,8 +26,17 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'fixture-pass',
       use: { ...devices['Desktop Chrome'] },
+      testIgnore: '**/daduhe-p0-runtime-review-chain.spec.js',
+    },
+    {
+      name: 'real-runtime-pass',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [
+        '**/acceptance-lane-tagging.spec.js',
+        '**/daduhe-p0-runtime-review-chain.spec.js',
+      ],
     },
   ],
   webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER

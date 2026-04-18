@@ -3,7 +3,9 @@ import {
   getBuildReviewBundleScriptRelPath,
   getHydrodeskFusionPlanDocRelPath,
   getRunCasePipelineScriptRelPath,
-} from '../config/hydrodesk_commands';
+} from '../config/hydrodesk_commands.js';
+
+const CONTROL_REVIEW_PIPELINE_SCRIPT = 'Hydrology/workflows/run_control_review_pipeline.py';
 
 /**
  * 合同 JSON 双轨：优先 canonical `*.json`，打开/读取可回退到 `*.contract.json`。
@@ -16,6 +18,15 @@ export function contractJsonPathAlternates(canonicalPath) {
   if (trimmed.endsWith('.contract.json')) return [trimmed];
   const base = trimmed.slice(0, -'.json'.length);
   return [trimmed, `${base}.contract.json`];
+}
+
+function splitContractJsonPaths(canonicalPath) {
+  const trimmed = String(canonicalPath ?? '').trim();
+  if (!trimmed.endsWith('.json') || trimmed.endsWith('.contract.json')) {
+    return { path: trimmed, bridgePath: '' };
+  }
+  const base = trimmed.slice(0, -'.json'.length);
+  return { path: trimmed, bridgePath: `${base}.contract.json` };
 }
 
 /** 约定：自主路线图文件名 `cases/<case_id>/contracts/<case_id>_hydrodesk_autonomy_roadmap.md` */
@@ -37,37 +48,37 @@ export function getCaseRunReviewReleaseContracts(caseId) {
   const resolvedCaseId = resolveShellCaseId(caseId);
   const contractRoot = `cases/${resolvedCaseId}/contracts`;
 
-  const runPath = `${contractRoot}/workflow_run.json`;
-  const reviewPath = `${contractRoot}/review_bundle.json`;
-  const releasePath = `${contractRoot}/release_manifest.json`;
+  const runContract = splitContractJsonPaths(`${contractRoot}/workflow_run.json`);
+  const reviewContract = splitContractJsonPaths(`${contractRoot}/review_bundle.json`);
+  const releaseContract = splitContractJsonPaths(`${contractRoot}/release_manifest.json`);
 
   return [
     {
       stage: 'Run',
       contractName: 'WorkflowRun',
-      path: runPath,
-      pathAlternates: contractJsonPathAlternates(runPath),
+      path: runContract.path,
+      bridgePath: runContract.bridgePath,
       status: 'completed_with_review',
       category: 'run',
-      note: `以 CaseManifest + DataPack 为输入锚点，锁定 ${resolvedCaseId || '当前案例'} 的 run_id、steps 与 outputs，作为 Review / Release 的唯一运行引用。`,
+      note: `以 CaseManifest + DataPack 为输入锚点，锁定 ${resolvedCaseId || '当前案例'} 的 run_id、steps 与 outputs，并把 control/SIL/ODD 收口结果绑定回同一 Run 引用。`,
     },
     {
       stage: 'Review',
       contractName: 'ReviewBundle',
-      path: reviewPath,
-      pathAlternates: contractJsonPathAlternates(reviewPath),
+      path: reviewContract.path,
+      bridgePath: reviewContract.bridgePath,
       status: 'review_pending',
       category: 'review',
-      note: '把 verdict、findings、coverage、verification 与 live dashboard 资产收束到正式 ReviewBundle，形成可追踪的审查对象。',
+      note: '把 verdict、findings、coverage、verification、live dashboard 与 control/SIL/ODD 审查信号收束到正式 ReviewBundle，形成可追踪的审查对象。',
     },
     {
       stage: 'Release',
       contractName: 'ReleaseManifest',
-      path: releasePath,
-      pathAlternates: contractJsonPathAlternates(releasePath),
+      path: releaseContract.path,
+      bridgePath: releaseContract.bridgePath,
       status: 'review_pending',
       category: 'release',
-      note: '把 Case / Data Pack / Run / Review 与 dashboard、verification、coverage 资产收口成 HydroDesk shell 的可交付 release 包。',
+      note: '把 Case / Data Pack / Run / Review 与 dashboard、verification、coverage、control validation 资产收口成 HydroDesk shell 的可交付 release 包。',
     },
   ];
 }
@@ -96,6 +107,18 @@ export function getCaseReviewAssets(caseId) {
       category: 'live',
     },
     {
+      name: 'Control Validation Summary',
+      note: '控制执行、SIL、ODD 与严格回归的统一收口摘要；HydroDesk review 默认消费该 canonical contract，而不是只盯原始 side files。',
+      path: `cases/${resolvedCaseId}/contracts/control_validation.latest.json`,
+      category: 'control',
+    },
+    {
+      name: 'Case Data Intelligence',
+      note: '统一展示资产画像、真实性风险、推荐主链、缺数清单与改模建议。',
+      path: `cases/${resolvedCaseId}/contracts/case_data_intelligence.latest.json`,
+      category: 'strategy',
+    },
+    {
       name: 'Outcome Coverage Report',
       note: '看 gate、coverage、schema/evidence 绑定情况。',
       path: `cases/${resolvedCaseId}/contracts/outcome_coverage_report.latest.json`,
@@ -106,6 +129,12 @@ export function getCaseReviewAssets(caseId) {
       note: `看 ${resolvedCaseId || '当前案例'} 阶段化验收结论与 execution integrity。`,
       path: `cases/${resolvedCaseId}/contracts/e2e_outcome_verification_report.json`,
       category: 'gate',
+    },
+    {
+      name: 'Final Report',
+      note: '统一最终报告对象，收束 readiness、review/release 结论与关键断言。',
+      path: `cases/${resolvedCaseId}/contracts/final_report.latest.json`,
+      category: 'delivery',
     },
     {
       name: 'HydroDesk Review Memo',
@@ -147,6 +176,12 @@ export function getCaseShellEntryPoints(caseId) {
       kind: 'command',
     },
     {
+      title: 'Control Entry',
+      summary: `以统一控制验证入口收口 ${resolvedCaseId || '当前案例'} 的 control / SIL / ODD / strict revalidation，并回写 cases/${resolvedCaseId}/contracts/control_validation.latest.json 与 triad。`,
+      path: CONTROL_REVIEW_PIPELINE_SCRIPT,
+      kind: 'command',
+    },
+    {
       title: 'Review Entry',
       summary: `以 ReviewBundle 为正式审查对象，把 verification / coverage / dashboard 资产绑定回 cases/${resolvedCaseId}/contracts/review_bundle.json。`,
       path: getBuildReviewBundleScriptRelPath(),
@@ -185,9 +220,11 @@ export function getCaseShellEntryPoints(caseId) {
   ];
 }
 
-export function getCaseWorkbenchStages(caseId) {
+export function getCaseWorkbenchStages(caseId, contractsOverride = null) {
   const resolvedCaseId = resolveShellCaseId(caseId);
-  const contracts = getCaseRunReviewReleaseContracts(resolvedCaseId);
+  const contracts = Array.isArray(contractsOverride)
+    ? contractsOverride
+    : getCaseRunReviewReleaseContracts(resolvedCaseId);
   const assets = getCaseReviewAssets(resolvedCaseId);
 
   const launchContract = contracts.find((contract) => contract.stage === 'Run');
@@ -196,29 +233,11 @@ export function getCaseWorkbenchStages(caseId) {
   const liveDashboard = assets.find((asset) => asset.name === 'Live Dashboard HTML');
   const verificationReport = assets.find((asset) => asset.name === 'Verification Report');
   const coverageReport = assets.find((asset) => asset.name === 'Outcome Coverage Report');
+  const finalReport = assets.find((asset) => asset.name === 'Final Report');
   const roadmap = assets.find((asset) => asset.name === 'Autonomy Roadmap');
 
-  const launchAlts = launchContract?.pathAlternates?.length
-    ? launchContract.pathAlternates
-    : launchContract?.path
-      ? contractJsonPathAlternates(launchContract.path)
-      : [];
   const reviewEvidencePath = verificationReport?.path || reviewContract?.path;
-  const reviewEvidenceAlts = verificationReport?.path
-    ? [verificationReport.path]
-    : reviewContract?.pathAlternates?.length
-      ? reviewContract.pathAlternates
-      : reviewContract?.path
-        ? contractJsonPathAlternates(reviewContract.path)
-        : [];
-  const releaseEvidencePath = releaseContract?.path || coverageReport?.path;
-  const releaseEvidenceAlts = releaseContract?.path
-    ? releaseContract.pathAlternates?.length
-      ? releaseContract.pathAlternates
-      : contractJsonPathAlternates(releaseContract.path)
-    : coverageReport?.path
-      ? [coverageReport.path]
-      : [];
+  const releaseEvidencePath = finalReport?.path || releaseContract?.path || coverageReport?.path;
 
   return [
     {
@@ -228,7 +247,7 @@ export function getCaseWorkbenchStages(caseId) {
       badge: launchContract?.status || 'pending',
       summary: `从 pinned autonomy workflow 进入 ${resolvedCaseId || '当前案例'} 主链，先锁 WorkflowRun，再把执行日志与恢复命令绑回桌面壳。`,
       evidencePath: launchContract?.path,
-      evidencePathAlternates: launchAlts.filter(Boolean),
+      evidenceBridgePath: launchContract?.bridgePath || '',
       evidenceLabel: launchContract?.contractName || 'WorkflowRun',
       notes: [
         '优先启动 autonomy_autorun / autonomy_assess',
@@ -256,7 +275,7 @@ export function getCaseWorkbenchStages(caseId) {
       badge: reviewContract?.status || 'pending',
       summary: '让 verification、coverage、人工确认与 ReviewBundle 回到同一证据链，不再让审查入口飘在项目壳之外。',
       evidencePath: reviewEvidencePath,
-      evidencePathAlternates: reviewEvidenceAlts.filter(Boolean),
+      evidenceBridgePath: verificationReport?.path ? '' : reviewContract?.bridgePath || '',
       evidenceLabel: verificationReport?.name || reviewContract?.contractName || 'Review Bundle',
       notes: [
         '先核 verification / coverage，再回到人工确认项',
@@ -270,8 +289,8 @@ export function getCaseWorkbenchStages(caseId) {
       badge: releaseContract?.status || 'pending',
       summary: `把 ReleaseManifest、coverage、roadmap 和交付命令收束到同一壳层，形成可签发的 ${resolvedCaseId || '当前案例'} release 面。`,
       evidencePath: releaseEvidencePath,
-      evidencePathAlternates: releaseEvidenceAlts.filter(Boolean),
-      evidenceLabel: releaseContract?.contractName || coverageReport?.name || 'Release Manifest',
+      evidenceBridgePath: coverageReport?.path ? '' : releaseContract?.bridgePath || '',
+      evidenceLabel: finalReport?.name || releaseContract?.contractName || coverageReport?.name || 'Release Manifest',
       notes: [
         'release 入口必须绑定 contract triad 与 gate 结果',
         'roadmap / backlog 保持为 release 前的唯一升级面',

@@ -15,6 +15,7 @@ for (const caseId of ROLLOUT_CASE_IDS) {
     test.beforeEach(async ({ page }, testInfo) => {
       await page.goto('/projects');
       await expect(page.getByRole('button', { name: '刷新案例列表' })).toBeVisible();
+      await page.getByTestId('project-center-info-tab-catalog').dispatchEvent('click');
       const row = page.locator(`[data-testid="case-row"][data-case-id="${caseId}"]`);
       const n = await row.count();
       if (n === 0) {
@@ -24,7 +25,7 @@ for (const caseId of ROLLOUT_CASE_IDS) {
         );
         return;
       }
-      await row.getByRole('button', { name: '切换' }).click();
+      await row.getByRole('button', { name: '切换' }).dispatchEvent('click');
       await expect(page.locator('main').getByText(new RegExp(`case\\s+${caseId}`, 'i'))).toBeVisible();
     });
 

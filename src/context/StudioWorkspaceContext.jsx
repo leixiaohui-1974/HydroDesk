@@ -1,13 +1,27 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { studioState } from '../data/studioState';
+import { defaultStudioAccountKey, getStudioAccount } from '../data/accountCatalog';
 
 const StudioWorkspaceContext = createContext(null);
+const ACCOUNT_STORAGE_KEY = 'hydrodesk.activeAccountKey';
 
 export function StudioWorkspaceProvider({ children }) {
   const [activeProjectId, setActiveProjectId] = useState(studioState.activeProjectId);
-  const [activeRole, setActiveRole] = useState(studioState.activeRole);
-  const [activeMode, setActiveMode] = useState(studioState.activeMode);
-  const [activeSurfaceMode, setActiveSurfaceMode] = useState(studioState.activeSurfaceMode);
+  const [activeAccountKey, setActiveAccountKey] = useState(() => {
+    if (typeof window === 'undefined') return defaultStudioAccountKey;
+    return window.localStorage.getItem(ACCOUNT_STORAGE_KEY) || defaultStudioAccountKey;
+  });
+  const [activeSurfaceMode, setActiveSurfaceMode] = useState(getStudioAccount(defaultStudioAccountKey).surfaceMode || studioState.activeSurfaceMode);
+
+  useEffect(() => {
+    const activeAccount = getStudioAccount(activeAccountKey);
+    setActiveSurfaceMode(activeAccount.surfaceMode || studioState.activeSurfaceMode);
+  }, [activeAccountKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(ACCOUNT_STORAGE_KEY, activeAccountKey);
+  }, [activeAccountKey]);
 
   const value = useMemo(() => {
     const fromStudio = studioState.projects.find((project) => project.id === activeProjectId);
@@ -26,18 +40,23 @@ export function StudioWorkspaceProvider({ children }) {
         : null) ||
       studioState.projects[0];
 
+    const activeAccount = getStudioAccount(activeAccountKey);
+    const activeRole = activeAccount.role;
+    const activeMode = activeAccount.mode || studioState.activeMode;
+
     return {
       activeProjectId,
       activeProject,
+      activeAccountKey,
+      activeAccount,
       activeRole,
       activeMode,
       activeSurfaceMode,
       setActiveProjectId,
-      setActiveRole,
-      setActiveMode,
+      loginAsAccount: setActiveAccountKey,
       setActiveSurfaceMode,
     };
-  }, [activeProjectId, activeRole, activeMode, activeSurfaceMode]);
+  }, [activeAccountKey, activeProjectId, activeSurfaceMode]);
 
   return (
     <StudioWorkspaceContext.Provider value={value}>

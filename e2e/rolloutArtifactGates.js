@@ -2,6 +2,9 @@
  * Rollout：必达路径与 JSON 形状门禁的数据源为
  * Hydrology/configs/rollout_repo_artifact_gates.json（v2：artifact_profiles + case_artifact_profile）。
  * 无案例分支代码；Playwright 案例列表与 JSON 表、rolloutCaseIds.js 须一致。
+ *
+ * Python 镜像（无浏览器 CI）：Hydrology/scripts/run_rollout_contract_gate.sh（hydrodesk-ci / pure-gate / 本地一致）；
+ * 仅 pytest：run_rollout_pytest_mirror.sh；解析见 rollout_gates_parse.py
  */
 import fs from 'fs';
 import path from 'path';

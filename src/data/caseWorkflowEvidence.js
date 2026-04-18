@@ -1,6 +1,9 @@
 /**
- * 以 daduhe 为模板路径；可通过 remapWorkflowEvidenceForCase 映射到其它案例。
- * 建模页仅在 caseShellPresets.hasFullSpatialHydroEvidenceCase(caseId) 为真时展示全量证据树，避免无流域/水文主链的案例出现空壳误导。
+ * Generic workflow evidence template.
+ *
+ * Paths use the `{case_id}` placeholder and are resolved at read time.
+ * This keeps the modeling evidence navigator case-agnostic while still
+ * allowing a rich template to be reused across validation cases.
  */
 const WORKFLOW_EVIDENCE_TEMPLATE = {
   source_to_delineation: {
@@ -11,13 +14,13 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
         workflow: 'section_analysis',
         relationship: '上游 workflow',
         detail: '先回看断面检查与候选对象，再确认本条流域闭合链路没有脱离同一套空间对象。',
-        contractPath: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+        contractPath: 'cases/{case_id}/contracts/outcomes/section_analysis.latest.json',
       },
       {
         workflow: 'model',
         relationship: '下游 workflow',
         detail: '流域边界、控制站映射和 data pack 会继续供 full modeling 主链读取。',
-        contractPath: 'cases/daduhe/contracts/outcomes/model.latest.json',
+        contractPath: 'cases/{case_id}/contracts/outcomes/model.latest.json',
       },
     ],
     groups: [
@@ -30,7 +33,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Outlets ready',
             focus: '出口闭合对象',
             detail: '用于确认入模出口、主河道节点与后续流域划分结果使用的是同一批 outlet。',
-            path: 'cases/daduhe/source_selection/product_outputs/outlets.delineation_ready.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/outlets.delineation_ready.json',
             route: '/modeling',
             routeLabel: '回到拓扑/GIS',
           },
@@ -38,7 +41,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Control station mapping',
             focus: '控制站 ↔ 拓扑节点',
             detail: '把控制站、outlet IDs 和梯级拓扑节点统一到一张映射表里，避免后续结果只剩文件路径。',
-            path: 'cases/daduhe/source_selection/product_outputs/control_station_mapping.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/control_station_mapping.json',
             route: '/modeling',
             routeLabel: '查看建模面',
           },
@@ -46,7 +49,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Watershed delineation result',
             focus: '流域边界 / 断面闭合',
             detail: '确认最终流域边界和断面闭合结果已经接到本条链路的空间对象上。',
-            path: 'cases/daduhe/contracts/watershed_delineation_result.latest.json',
+            path: 'cases/{case_id}/contracts/watershed_delineation_result.latest.json',
             route: '/review',
             routeLabel: '查看审查面',
           },
@@ -61,7 +64,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Source reliability',
             focus: '数据源可信度',
             detail: '解释当前 DEM / 河网 / 输入对象为什么能作为正式空间输入证据。',
-            path: 'cases/daduhe/source_selection/product_outputs/source_reliability.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/source_reliability.json',
             route: '/review',
             routeLabel: '查看结论',
           },
@@ -69,7 +72,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Coordinate validation',
             focus: '坐标 / 投影校核',
             detail: '核对控制站、河网和候选输入的空间位置一致性。',
-            path: 'cases/daduhe/source_selection/product_outputs/coordinate_validation.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/coordinate_validation.json',
             route: '/modeling',
             routeLabel: '回到 GIS 面',
           },
@@ -77,7 +80,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Source selection map',
             focus: '图层叠加观测',
             detail: '在浏览器地图中对比 DEM、河网和候选数据源覆盖范围。',
-            path: 'cases/daduhe/source_selection/index.html',
+            path: 'cases/{case_id}/source_selection/index.html',
             route: '/simulation',
             routeLabel: '切到工作流页',
           },
@@ -92,7 +95,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Outcome contract',
             focus: 'workflow 正式合同',
             detail: 'source_to_delineation 的正式 outcome 合同，适合和 pipeline report / data pack 对照阅读。',
-            path: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+            path: 'cases/{case_id}/contracts/outcomes/source_to_delineation.latest.json',
             route: '/simulation',
             routeLabel: '查看 workflow',
           },
@@ -100,7 +103,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Pipeline report',
             focus: '链路结果摘要',
             detail: '把 source discovery 到 delineation 的结果收口为可审查结果资产。',
-            path: 'cases/daduhe/contracts/pipeline_report.latest.json',
+            path: 'cases/{case_id}/contracts/pipeline_report.latest.json',
             route: '/review',
             routeLabel: '审查交付',
           },
@@ -108,7 +111,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Data pack',
             focus: '入模数据包',
             detail: '查看当前链路最终提供给后续 workflow 的正式数据包对象。',
-            path: 'cases/daduhe/contracts/data_pack.latest.json',
+            path: 'cases/{case_id}/contracts/data_pack.latest.json',
             route: '/review',
             routeLabel: '查看交付',
           },
@@ -124,7 +127,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
         workflow: 'source_to_delineation',
         relationship: '下游 workflow',
         detail: '断面检查后的候选对象会继续流向 source_to_delineation 做边界闭合与 data pack 固化。',
-        contractPath: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+        contractPath: 'cases/{case_id}/contracts/outcomes/source_to_delineation.latest.json',
       },
     ],
     groups: [
@@ -137,7 +140,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Watershed result',
             focus: '断面闭合对象',
             detail: '确认断面分析引用的是当前主线流域划分结果，而不是旧的 false-green 产物。',
-            path: 'cases/daduhe/contracts/watershed_delineation_result.latest.json',
+            path: 'cases/{case_id}/contracts/watershed_delineation_result.latest.json',
             route: '/review',
             routeLabel: '查看审查面',
           },
@@ -145,7 +148,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Inspection bundle',
             focus: '断面检查结论',
             detail: '用 inspection.json 追踪断面检查和候选对象的来源、命中情况与说明。',
-            path: 'cases/daduhe/source_selection/product_outputs/inspection.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/inspection.json',
             route: '/review',
             routeLabel: '查看 review',
           },
@@ -160,7 +163,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Source selection map',
             focus: '断面候选图层',
             detail: '用 GIS 叠图核对断面候选、河网与控制范围的空间关系。',
-            path: 'cases/daduhe/source_selection/index.html',
+            path: 'cases/{case_id}/source_selection/index.html',
             route: '/modeling',
             routeLabel: '回到拓扑/GIS',
           },
@@ -175,7 +178,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Outcome contract',
             focus: 'workflow 正式合同',
             detail: 'section_analysis 的正式 outcome 合同，便于和审查面/地图对象做一致性核对。',
-            path: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+            path: 'cases/{case_id}/contracts/outcomes/section_analysis.latest.json',
             route: '/simulation',
             routeLabel: '查看 workflow',
           },
@@ -183,7 +186,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Section analysis contract',
             focus: '断面工作流结果',
             detail: '当前 section_analysis 的正式结果合同，用于和 GIS/拓扑证据联读。',
-            path: 'cases/daduhe/contracts/section_analysis.latest.json',
+            path: 'cases/{case_id}/contracts/section_analysis.latest.json',
             route: '/simulation',
             routeLabel: '切到工作流页',
           },
@@ -191,7 +194,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Inspection support',
             focus: '辅助检查资产',
             detail: '结合 inspection 结果确认断面成果的空间来源和补充证据。',
-            path: 'cases/daduhe/source_selection/product_outputs/inspection.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/inspection.json',
             route: '/review',
             routeLabel: '查看交付',
           },
@@ -207,13 +210,13 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
         workflow: 'source_to_delineation',
         relationship: '上游 workflow',
         detail: '建模主链的空间基础面仍然来自 source_to_delineation 固化的边界、控制站映射与 data pack。',
-        contractPath: 'cases/daduhe/contracts/outcomes/source_to_delineation.latest.json',
+        contractPath: 'cases/{case_id}/contracts/outcomes/source_to_delineation.latest.json',
       },
       {
         workflow: 'section_analysis',
         relationship: '并排检查 workflow',
         detail: '需要复核断面/河道检查结论时，可直接回跳到 section_analysis 对照 inspection 证据。',
-        contractPath: 'cases/daduhe/contracts/outcomes/section_analysis.latest.json',
+        contractPath: 'cases/{case_id}/contracts/outcomes/section_analysis.latest.json',
       },
     ],
     groups: [
@@ -226,7 +229,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Control station mapping',
             focus: '模型控制点',
             detail: '确认 full pipeline / coupled 结果仍然对应当前控制站与梯级节点映射。',
-            path: 'cases/daduhe/source_selection/product_outputs/control_station_mapping.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/control_station_mapping.json',
             route: '/modeling',
             routeLabel: '回到建模面',
           },
@@ -234,7 +237,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Watershed result',
             focus: '空间基础面',
             detail: '模型链路需要回到这份边界/断面闭合结果来解释输入空间范围。',
-            path: 'cases/daduhe/contracts/watershed_delineation_result.latest.json',
+            path: 'cases/{case_id}/contracts/watershed_delineation_result.latest.json',
             route: '/review',
             routeLabel: '查看证据',
           },
@@ -249,7 +252,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Source reliability',
             focus: '输入可信度',
             detail: '在解释仿真主链结果前，先确认 DEM / 河网 / 输入对象的可靠性。',
-            path: 'cases/daduhe/source_selection/product_outputs/source_reliability.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/source_reliability.json',
             route: '/review',
             routeLabel: '查看审查',
           },
@@ -257,7 +260,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Coordinate validation',
             focus: '空间位置校核',
             detail: '模型结果回看时优先检查站点与河网位置是否仍然匹配当前空间输入。',
-            path: 'cases/daduhe/source_selection/product_outputs/coordinate_validation.json',
+            path: 'cases/{case_id}/source_selection/product_outputs/coordinate_validation.json',
             route: '/modeling',
             routeLabel: '查看 GIS',
           },
@@ -272,7 +275,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Outcome contract',
             focus: 'workflow 正式合同',
             detail: 'model workflow 的正式 outcome 合同，适合与 full pipeline / coupled 结果一起联读。',
-            path: 'cases/daduhe/contracts/outcomes/model.latest.json',
+            path: 'cases/{case_id}/contracts/outcomes/model.latest.json',
             route: '/simulation',
             routeLabel: '查看 workflow',
           },
@@ -280,7 +283,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Full pipeline report',
             focus: '建模主链结果',
             detail: '模型链主报告，适合和 upstream 空间证据同屏核对。',
-            path: 'cases/daduhe/contracts/full_pipeline_report.latest.json',
+            path: 'cases/{case_id}/contracts/full_pipeline_report.latest.json',
             route: '/simulation',
             routeLabel: '切到工作流页',
           },
@@ -288,7 +291,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Coupled hydro-hydraulic',
             focus: '耦合结果',
             detail: '查看耦合建模结果，并把结论回链到控制站与边界对象。',
-            path: 'cases/daduhe/contracts/coupled_hydro_hydraulic.latest.json',
+            path: 'cases/{case_id}/contracts/coupled_hydro_hydraulic.latest.json',
             route: '/review',
             routeLabel: '查看交付',
           },
@@ -296,7 +299,7 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
             title: 'Hydrology simulation',
             focus: '水文仿真结果',
             detail: '从水文仿真结果回看空间输入与控制面是否一致。',
-            path: 'cases/daduhe/contracts/hydrology_sim.latest.json',
+            path: 'cases/{case_id}/contracts/hydrology_sim.latest.json',
             route: '/review',
             routeLabel: '查看结论',
           },
@@ -306,21 +309,15 @@ const WORKFLOW_EVIDENCE_TEMPLATE = {
   },
 };
 
-const TEMPLATE_CASE_ID = 'daduhe';
-
 function remapWorkflowEvidenceForCase(caseId, workflowName) {
   const cid = caseId != null ? String(caseId).trim() : '';
   const key = workflowName || 'source_to_delineation';
   const base = WORKFLOW_EVIDENCE_TEMPLATE[key] || WORKFLOW_EVIDENCE_TEMPLATE.source_to_delineation;
-  if (!cid || cid === TEMPLATE_CASE_ID) {
-    return base;
-  }
-  const fromPrefix = `cases/${TEMPLATE_CASE_ID}/`;
-  const toPrefix = `cases/${cid}/`;
+  const token = '{case_id}';
 
   const walk = (node) => {
     if (typeof node === 'string') {
-      return node.split(fromPrefix).join(toPrefix);
+      return cid ? node.split(token).join(cid) : node;
     }
     if (Array.isArray(node)) {
       return node.map(walk);
@@ -340,18 +337,10 @@ function remapWorkflowEvidenceForCase(caseId, workflowName) {
 
 export const caseEvidenceWorkflowOrder = ['source_to_delineation', 'section_analysis', 'model'];
 
-/** @deprecated 使用 {@link caseEvidenceWorkflowOrder} */
-export const daduheEvidenceWorkflowOrder = caseEvidenceWorkflowOrder;
-
 /**
  * @param {string} caseId
  * @param {string} workflowName
  */
 export function getCaseWorkflowEvidence(caseId, workflowName) {
   return remapWorkflowEvidenceForCase(caseId, workflowName);
-}
-
-/** @deprecated 使用 {@link getCaseWorkflowEvidence} */
-export function getDaduheWorkflowEvidence(workflowName) {
-  return getCaseWorkflowEvidence(TEMPLATE_CASE_ID, workflowName);
 }

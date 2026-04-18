@@ -47,7 +47,7 @@ export default function ContextPanel({ view }) {
     : [...view.actions, ...modeActions];
 
   return (
-    <aside className="w-80 border-l border-slate-700/50 bg-slate-900/70 backdrop-blur-sm overflow-y-auto">
+    <aside className="w-60 border-l border-slate-700/50 bg-slate-900/70 backdrop-blur-sm overflow-y-auto">
       <div className="p-4 space-y-4">
         <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="flex items-center justify-between gap-3">
@@ -78,72 +78,57 @@ export default function ContextPanel({ view }) {
 
         <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="text-xs uppercase tracking-wider text-slate-500 mb-2">当前视图</div>
-          <h2 className="text-base font-semibold text-slate-100">{view.title}</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-400">{view.subtitle}</p>
-        </section>
-
-        <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-sm font-medium text-slate-200">{primaryAgent.name}</div>
-              <div className="text-xs text-slate-500">{primaryAgent.role}</div>
-            </div>
-            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300">
-              自动装配
-            </span>
+          <div>
+            <h2 className="text-base font-semibold text-slate-100">{view.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400 line-clamp-2">{view.subtitle}</p>
           </div>
-          <p className="text-sm leading-6 text-slate-400">{primaryAgent.summary}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {primaryAgent.chips.map((chip) => (
-              <span
-                key={chip}
-                className="rounded-full border border-hydro-500/20 bg-hydro-500/10 px-2 py-1 text-[11px] text-hydro-300"
-              >
-                {chip}
+          <div className="mt-4 border-t border-slate-700/40 pt-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-slate-200">{primaryAgent.name}</div>
+                <div className="text-xs text-slate-500">{primaryAgent.role}</div>
+              </div>
+              <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
+                {activeProject.caseId}
               </span>
-            ))}
+            </div>
+          <p className="mt-2 text-sm leading-6 text-slate-400 line-clamp-2">{primaryAgent.summary}</p>
           </div>
         </section>
 
         <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-sm font-medium text-slate-200 mb-3">关注焦点</div>
+          <div className="text-sm font-medium text-slate-200 mb-3">工作摘要</div>
           <div className="space-y-2">
-            {focusItems.map((item) => (
+            {focusItems.slice(0, 1).map((item) => (
               <div
                 key={item}
-                className="flex items-center justify-between rounded-lg border border-slate-700/40 bg-slate-800/60 px-3 py-2"
+                className="rounded-lg border border-slate-700/40 bg-slate-800/60 px-3 py-2"
               >
-                <span className="text-sm text-slate-300">{item}</span>
-                <span className="text-[10px] text-slate-500">已激活</span>
+                <div className="text-sm text-slate-300">{item}</div>
               </div>
             ))}
           </div>
-        </section>
-
-        <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-sm font-medium text-slate-200 mb-3">上下文摘要</div>
-          <div className="space-y-3">
-            {contextMetrics.map((metric) => (
-              <div key={metric.label} className="flex items-center justify-between">
+          <div className="mt-3 space-y-2">
+            {contextMetrics.slice(2, 4).map((metric) => (
+              <div key={metric.label} className="rounded-lg border border-slate-700/40 bg-slate-800/40 px-3 py-2">
                 <span className="text-xs text-slate-500">{metric.label}</span>
-                <span className="text-sm text-slate-300">{metric.value}</span>
+                <div className="mt-1 text-sm text-slate-300">{metric.value}</div>
               </div>
             ))}
           </div>
-        </section>
-
-        <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-4">
-          <div className="text-sm font-medium text-slate-200 mb-3">推荐动作</div>
-          <div className="space-y-2">
-            {recommendedActions.map((action) => (
-              <button
-                key={action}
-                className="w-full rounded-lg border border-slate-700/50 bg-slate-800/70 px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:border-hydro-500/40 hover:text-hydro-300"
-              >
-                {action}
-              </button>
-            ))}
-          </div>
+          <details className="mt-3 rounded-lg border border-slate-700/40 bg-slate-800/30 p-3">
+            <summary className="cursor-pointer list-none text-xs text-slate-300">下一步动作</summary>
+            <div className="mt-3 space-y-2">
+              {recommendedActions.slice(0, 2).map((action) => (
+                <button
+                  key={action}
+                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/70 px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:border-hydro-500/40 hover:text-hydro-300"
+                >
+                  {action}
+                </button>
+              ))}
+            </div>
+          </details>
         </section>
       </div>
     </aside>

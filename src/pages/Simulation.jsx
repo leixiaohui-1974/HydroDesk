@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { openPath, revealPath } from '../api/tauri_bridge';
+import { Link, useSearchParams } from 'react-router-dom';
+import { isTauri, openPath, revealPath, runWorkspaceCommand } from '../api/tauri_bridge';
 import { getCaseReviewAssets, getCaseShellEntryPoints, resolveShellCaseId } from '../data/case_contract_shell';
 import {
   AUTONOMY_PINNED_WORKFLOW_CARDS,
@@ -16,6 +16,11 @@ import { useCaseWorkflowCatalog } from '../hooks/useCaseWorkflowCatalog';
 import { useStudioRuntime } from '../hooks/useStudioRuntime';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
+import {
+  buildRunCasePipelinePreflightCommand,
+  parseSingleObjectJsonStdout,
+} from '../config/hydrodesk_commands';
+import AutoModelingLoopPanel from '../components/AutoModelingLoopPanel';
 
 const SimulationRow = ({ sim, onOpenLog, onRevealLog, onStop }) => {
   const statusColors = {
@@ -78,13 +83,53 @@ const SimulationRow = ({ sim, onOpenLog, onRevealLog, onStop }) => {
 const inspectionAssetNames = new Set(['Live Dashboard HTML', 'Live Dashboard Markdown', 'Verification Report']);
 const reviewAssetNames = new Set(['Outcome Coverage Report', 'Autonomy Roadmap', 'HydroDesk Fusion Backlog']);
 
+function SimulationActionButton({ children, className = '', ...props }) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={`rounded-lg border px-3 py-1.5 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SimulationActionGroup({ title, summary, defaultOpen = false, children }) {
+  return (
+    <details open={defaultOpen} className="rounded-xl border border-slate-700/50 bg-slate-950/35">
+      <summary className="cursor-pointer list-none px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-medium text-slate-200">{title}</div>
+            <div className="mt-1 text-[10px] leading-4 text-slate-500">{summary}</div>
+          </div>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-400">
+            展开
+          </span>
+        </div>
+      </summary>
+      <div className="border-t border-slate-800/70 px-4 py-3">
+        <div className="flex flex-wrap gap-2">{children}</div>
+      </div>
+    </details>
+  );
+}
+
 export default function Simulation() {
   const { activeProject } = useStudioWorkspace();
-  const shellCaseId = resolveShellCaseId(activeProject.caseId);
+  const [searchParams] = useSearchParams();
+  const routeCaseId = String(searchParams.get('case_id') ?? '').trim();
+  const effectiveCaseId = routeCaseId || activeProject.caseId;
+  const shellCaseId = resolveShellCaseId(effectiveCaseId);
   const [selectedEngine, setSelectedEngine] = useState('local');
+  const [pipelinePreflight, setPipelinePreflight] = useState(null);
+  const [pipelinePreflightLoading, setPipelinePreflightLoading] = useState(false);
+  const [pipelinePreflightError, setPipelinePreflightError] = useState('');
+  const [launchContext, setLaunchContext] = useState(null);
   const { workflows, runtimeSnapshot, loading, reload: reloadRuntime } = useStudioRuntime();
-  const { summary: caseSummary } = useCaseContractSummary(activeProject.caseId);
-  const { catalog: workflowCatalog } = useCaseWorkflowCatalog(activeProject.caseId);
+  const { summary: caseSummary } = useCaseContractSummary(shellCaseId);
+  const { catalog: workflowCatalog } = useCaseWorkflowCatalog(shellCaseId);
   const {
     artifacts,
     checkpoints,
@@ -97,7 +142,7 @@ export default function Simulation() {
     startWorkflow,
     stopWorkflow,
   } = useWorkflowExecution(
-    activeProject.caseId,
+    shellCaseId,
     studioState.artifacts
   );
   const [selectedWorkflow, setSelectedWorkflow] = useState('');
@@ -149,6 +194,33 @@ export default function Simulation() {
     const recentRuns = [launchResult, ...executionHistory].filter(Boolean);
     return recentRuns.find((run) => AUTONOMY_PINNED_WORKFLOW_CARDS.some((card) => card.workflow === run.workflow)) || null;
   }, [executionHistory, launchResult]);
+  const preflightSuggestedWorkflows = useMemo(
+    () => pipelinePreflight?.modeling_hints?.suggested_workflows || [],
+    [pipelinePreflight]
+  );
+  const selectedWorkflowSuggested = useMemo(
+    () => !!selectedWorkflow && preflightSuggestedWorkflows.includes(selectedWorkflow),
+    [preflightSuggestedWorkflows, selectedWorkflow]
+  );
+
+  function confirmWorkflowLaunch(workflowName) {
+    if (!pipelinePreflight || !workflowName || typeof window === 'undefined') {
+      return true;
+    }
+    const warnings = [];
+    if ((pipelinePreflight.missing_inputs || []).length > 0) {
+      warnings.push(`入口缺口: ${(pipelinePreflight.missing_inputs || []).join(', ')}`);
+    }
+    if (preflightSuggestedWorkflows.length > 0 && !preflightSuggestedWorkflows.includes(workflowName)) {
+      warnings.push(`Graphify 建议工作流: ${preflightSuggestedWorkflows.join(', ')}`);
+    }
+    if (warnings.length === 0) {
+      return true;
+    }
+    return window.confirm(
+      [`当前启动前导提示:`, ...warnings, `仍然启动 ${workflowName} ?`].join('\n')
+    );
+  }
 
   useEffect(() => {
     if (!selectedWorkflow && preferredWorkflow) {
@@ -156,15 +228,72 @@ export default function Simulation() {
     }
   }, [preferredWorkflow, selectedWorkflow]);
 
+  useEffect(() => {
+    if (!shellCaseId || !isTauri) {
+      setPipelinePreflight(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setPipelinePreflightLoading(true);
+      setPipelinePreflightError('');
+      try {
+        const cmd = buildRunCasePipelinePreflightCommand(shellCaseId, 'simulation');
+        const result = await runWorkspaceCommand(cmd, '.', null);
+        const payload = parseSingleObjectJsonStdout(result?.stdout);
+        if (!cancelled) {
+          if (payload?.case_id === shellCaseId) {
+            setPipelinePreflight(payload);
+          } else {
+            setPipelinePreflight(null);
+            setPipelinePreflightError('未能解析 case pipeline preflight JSON');
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPipelinePreflight(null);
+          setPipelinePreflightError(error?.message || String(error));
+        }
+      } finally {
+        if (!cancelled) setPipelinePreflightLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shellCaseId, isTauri]);
+
   async function handleStartWorkflow() {
     if (!selectedWorkflow) {
       return;
     }
+    if (!confirmWorkflowLaunch(selectedWorkflow)) {
+      return;
+    }
+    setLaunchContext({
+      workflow: selectedWorkflow,
+      preflightOk: pipelinePreflight?.ok ?? null,
+      missingInputs: pipelinePreflight?.missing_inputs || [],
+      suggestedWorkflows: preflightSuggestedWorkflows,
+      selectedWorkflowSuggested,
+      entrySources: pipelinePreflight?.modeling_hints?.entry_sources || {},
+    });
     await startWorkflow(selectedWorkflow);
   }
 
   async function handleStartPinnedWorkflow(workflowName) {
     setSelectedWorkflow(workflowName);
+    if (!confirmWorkflowLaunch(workflowName)) {
+      return;
+    }
+    setLaunchContext({
+      workflow: workflowName,
+      preflightOk: pipelinePreflight?.ok ?? null,
+      missingInputs: pipelinePreflight?.missing_inputs || [],
+      suggestedWorkflows: preflightSuggestedWorkflows,
+      selectedWorkflowSuggested: preflightSuggestedWorkflows.includes(workflowName),
+      entrySources: pipelinePreflight?.modeling_hints?.entry_sources || {},
+    });
     await startWorkflow(workflowName);
   }
 
@@ -173,9 +302,78 @@ export default function Simulation() {
   }
 
   const currentLogFile = logTail.log_file || launchResult?.log_file || runtimeSnapshot.log_file;
+  const simulationPrimaryActions = [
+    {
+      key: 'start',
+      label: starting ? '启动中...' : '启动工作流',
+      disabled: !selectedWorkflow || starting,
+      onClick: handleStartWorkflow,
+      className: 'border-hydro-500/35 bg-hydro-600 text-white hover:bg-hydro-700',
+    },
+    {
+      key: 'stop',
+      label: '停止流程',
+      disabled: !launchResult?.pid || launchResult?.status === 'stopped',
+      onClick: async () => {
+        await stopWorkflow();
+      },
+      className: 'border-red-500/30 text-red-300 hover:bg-red-500/10',
+    },
+    {
+      key: 'refresh',
+      label: '手动刷新',
+      disabled: false,
+      onClick: handleRefresh,
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+  ];
+  const simulationDiagnosticActions = [
+    {
+      key: 'preflight',
+      label: pipelinePreflightLoading ? '刷新 preflight 中…' : '刷新 preflight',
+      disabled: !shellCaseId || pipelinePreflightLoading || !isTauri,
+      onClick: async () => {
+        setPipelinePreflightLoading(true);
+        setPipelinePreflightError('');
+        try {
+          const cmd = buildRunCasePipelinePreflightCommand(shellCaseId, 'simulation');
+          const result = await runWorkspaceCommand(cmd, '.', null);
+          const payload = parseSingleObjectJsonStdout(result?.stdout);
+          if (payload?.case_id === shellCaseId) {
+            setPipelinePreflight(payload);
+          } else {
+            setPipelinePreflight(null);
+            setPipelinePreflightError('未能解析 case pipeline preflight JSON');
+          }
+        } catch (error) {
+          setPipelinePreflight(null);
+          setPipelinePreflightError(error?.message || String(error));
+        } finally {
+          setPipelinePreflightLoading(false);
+        }
+      },
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    },
+  ];
+  const simulationContextActions = [
+    {
+      key: 'open-log',
+      label: '打开当前日志',
+      disabled: !currentLogFile,
+      onClick: () => openPath(currentLogFile),
+      className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    },
+    {
+      key: 'reveal-log',
+      label: '定位当前日志',
+      disabled: !currentLogFile,
+      onClick: () => revealPath(currentLogFile),
+      className: 'border-slate-700/50 text-slate-300 hover:bg-slate-800/60',
+    },
+  ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div data-testid="simulation-page" className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Launch · 主链启动台</h1>
@@ -184,30 +382,106 @@ export default function Simulation() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleRefresh}
-            className="px-4 py-2 rounded-lg border border-slate-700/50 text-slate-300 text-sm hover:bg-slate-800/60 transition-colors"
-          >
-            手动刷新
-          </button>
-          <button
-            onClick={async () => {
-              await stopWorkflow();
-            }}
-            disabled={!launchResult?.pid || launchResult?.status === 'stopped'}
-            className="px-4 py-2 rounded-lg border border-red-500/30 text-red-300 text-sm hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            停止流程
-          </button>
-          <button
-            onClick={handleStartWorkflow}
-            disabled={!selectedWorkflow || starting}
-            className="px-4 py-2 bg-hydro-600 text-white text-sm rounded-lg hover:bg-hydro-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {starting ? '启动中...' : '启动工作流'}
-          </button>
+          <span className="rounded-full border border-hydro-500/25 bg-hydro-500/10 px-3 py-1 text-xs text-hydro-300">
+            Launch Workspace
+          </span>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
+            case {shellCaseId || '—'}
+          </span>
         </div>
       </div>
+
+      <section className="rounded-2xl border border-slate-700/50 bg-slate-900/40 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">启动动作中心</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              第一屏只保留启动、诊断和日志类高频动作；执行面细节与证据仍保留在下方各结果区。
+            </p>
+          </div>
+          <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
+            功能全保留 · 入口重组
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 xl:grid-cols-3">
+          <SimulationActionGroup
+            title="主操作"
+            summary="围绕当前选中 workflow 的启动、停止与刷新。"
+            defaultOpen
+          >
+            {simulationPrimaryActions.map((action) => (
+              <SimulationActionButton
+                key={action.key}
+                disabled={action.disabled}
+                onClick={action.onClick}
+                className={action.className}
+              >
+                {action.label}
+              </SimulationActionButton>
+            ))}
+          </SimulationActionGroup>
+          <SimulationActionGroup
+            title="启动前诊断"
+            summary="preflight 是启动前唯一必须看的前导检查，主入口集中在这里。"
+            defaultOpen
+          >
+            {simulationDiagnosticActions.map((action) => (
+              <SimulationActionButton
+                key={action.key}
+                disabled={action.disabled}
+                onClick={action.onClick}
+                className={action.className}
+              >
+                {action.label}
+              </SimulationActionButton>
+            ))}
+          </SimulationActionGroup>
+          <SimulationActionGroup
+            title="当前日志与上下文"
+            summary="保留日志打开/定位等上下文入口，不把结果阅读能力从页面上拿掉。"
+          >
+            {simulationContextActions.map((action) => (
+              <SimulationActionButton
+                key={action.key}
+                disabled={action.disabled}
+                onClick={action.onClick}
+                className={action.className}
+              >
+                {action.label}
+              </SimulationActionButton>
+            ))}
+          </SimulationActionGroup>
+        </div>
+      </section>
+
+      {pipelinePreflight ? (
+        <div
+          className={`rounded-xl border px-4 py-3 text-xs leading-6 ${
+            (pipelinePreflight.missing_inputs || []).length > 0
+              ? 'border-amber-500/25 bg-amber-500/5 text-amber-100/90'
+              : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-100/90'
+          }`}
+        >
+          <span className="font-semibold">
+            启动前提示：
+          </span>{' '}
+          {pipelinePreflight.missing_inputs?.length > 0
+            ? `当前入口仍缺 ${pipelinePreflight.missing_inputs.join(', ')}。`
+            : '当前入口对象已满足 simulation preflight。'}
+          {' '}Graphify 建议工作流：
+          <span className="font-mono text-slate-100">
+            {' '}
+            {preflightSuggestedWorkflows.join(', ') || '—'}
+          </span>
+          。当前选中：
+          <span className="font-mono text-slate-100"> {selectedWorkflow || '—'}</span>
+          {selectedWorkflow
+            ? selectedWorkflowSuggested
+              ? '（命中建议）'
+              : '（未命中建议，仍可手动启动）'
+            : ''}
+        </div>
+      ) : null}
 
       <div className="bg-slate-800/40 rounded-xl border border-slate-700/50 p-4">
         <h2 className="text-sm font-semibold text-slate-300 mb-3">执行后端</h2>
@@ -258,7 +532,7 @@ export default function Simulation() {
           <div className="mt-2 text-sm font-semibold text-slate-100">{runtimeSnapshot.resume_prompt || '无'}</div>
           <div className="mt-1 text-xs text-slate-500">{runtimeSnapshot.backend || '无后端信息'}</div>
         </div>
-        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
+        <div data-testid="simulation-case-gate" className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-4">
           <div className="text-xs text-slate-500">{caseGatePanelLabel(shellCaseId)}</div>
           <div className="mt-2 text-base font-semibold text-slate-100">
             {caseSummary.gate_status === 'passed' ? 'passed' : caseSummary.gate_status || 'unknown'}
@@ -281,6 +555,57 @@ export default function Simulation() {
           全链产物；主链仍以 E2E 壳层、contracts 与 manifest 为主。建模页的探源—断面—水文证据树亦仅对上述配置案例开放。
         </div>
       ) : null}
+
+      <AutoModelingLoopPanel caseId={shellCaseId} />
+
+      <div data-testid="simulation-pipeline-preflight" className="rounded-xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-100">Pipeline Preflight</div>
+            <div className="mt-1 text-xs text-slate-500">
+              simulation phase 的只读前导输出；用于在启动工作流前查看入口缺口与 Graphify 建模建议。
+            </div>
+          </div>
+          <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-400">
+            主刷新入口已收纳到启动动作中心
+          </span>
+        </div>
+        {pipelinePreflightError ? (
+          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            {pipelinePreflightError}
+          </div>
+        ) : null}
+        {pipelinePreflight ? (
+          <div className="mt-3 space-y-2 text-[11px] text-slate-400">
+            <div>
+              ok <span className="font-mono text-slate-200">{String(Boolean(pipelinePreflight.ok))}</span>
+              {' '}· phase <span className="font-mono text-slate-200">{pipelinePreflight.phase || '—'}</span>
+            </div>
+            <div>
+              missing_inputs:{' '}
+              <span className="font-mono text-slate-200">
+                {(pipelinePreflight.missing_inputs || []).join(', ') || 'none'}
+              </span>
+            </div>
+            <div>
+              entry_sources: manifest {pipelinePreflight.modeling_hints?.entry_sources?.case_manifest || '—'} · source_bundle{' '}
+              {pipelinePreflight.modeling_hints?.entry_sources?.source_bundle || '—'} · outlets{' '}
+              {pipelinePreflight.modeling_hints?.entry_sources?.outlets || '—'} · simulation{' '}
+              {pipelinePreflight.modeling_hints?.entry_sources?.simulation_config || '—'}
+            </div>
+            <div>
+              suggested_workflows:{' '}
+              <span className="font-mono text-slate-200">
+                {(pipelinePreflight.modeling_hints?.suggested_workflows || []).join(', ') || '—'}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 text-[11px] text-slate-500">
+            当前案例尚未加载 preflight；可点击“刷新 preflight”读取建模入口前导输出。
+          </div>
+        )}
+      </div>
 
       <section className="rounded-2xl border border-hydro-500/20 bg-hydro-500/5 p-5">
         <div className="flex items-center justify-between gap-4">
@@ -348,6 +673,20 @@ export default function Simulation() {
                     <div className="mt-3 text-[11px] leading-5 text-slate-500">
                       {card.manifest?.business_goal || card.surface.rationale}
                     </div>
+                    {preflightSuggestedWorkflows.length > 0 ? (
+                      <div className="mt-3 text-[11px] text-slate-500">
+                        Graphify 建议匹配：
+                        <span
+                          className={`ml-2 rounded-full border px-2 py-1 text-[10px] ${
+                            preflightSuggestedWorkflows.includes(card.workflow)
+                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                              : 'border-slate-700/50 bg-slate-900/50 text-slate-400'
+                          }`}
+                        >
+                          {preflightSuggestedWorkflows.includes(card.workflow) ? 'recommended' : 'not suggested'}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="mt-4 flex items-center gap-2">
                       <button
                         onClick={() => handleStartPinnedWorkflow(card.workflow)}
@@ -485,12 +824,30 @@ export default function Simulation() {
       </section>
 
       {launchResult && (
-        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+        <div data-testid="simulation-launch-result" className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
           <div className="text-sm font-semibold text-emerald-300">已触发真实 workflow 启动</div>
           <div className="mt-2 text-sm text-slate-200">
             {launchResult.workflow} · case {launchResult.case_id} · backend {launchResult.backend}
           </div>
           <div className="mt-1 text-xs text-slate-400">日志文件: {launchResult.log_file} · pid: {launchResult.pid} · status: {launchResult.status}</div>
+          {launchContext ? (
+            <div className="mt-3 space-y-1 text-[11px] text-slate-300">
+              <div>
+                启动时 preflight: <span className="font-mono">{String(Boolean(launchContext.preflightOk))}</span>
+                {' '}· missing_inputs:{' '}
+                <span className="font-mono">{launchContext.missingInputs.join(', ') || 'none'}</span>
+              </div>
+              <div>
+                启动时建议工作流:{' '}
+                <span className="font-mono">{launchContext.suggestedWorkflows.join(', ') || '—'}</span>
+                {' '}· 当前 workflow {launchContext.selectedWorkflowSuggested ? '命中建议' : '未命中建议'}
+              </div>
+              <div>
+                entry_sources: manifest {launchContext.entrySources.case_manifest || '—'} · source_bundle{' '}
+                {launchContext.entrySources.source_bundle || '—'} · outlets {launchContext.entrySources.outlets || '—'}
+              </div>
+            </div>
+          ) : null}
           <div className="mt-3 flex items-center gap-3">
             <button onClick={() => openPath(launchResult.log_file)} className="text-xs text-emerald-200 hover:text-white transition-colors">
               打开日志
@@ -650,39 +1007,7 @@ export default function Simulation() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-          <h2 className="text-sm font-semibold text-slate-200">大渡河验收闭环</h2>
-          <div className="mt-4 space-y-3">
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">执行统计</div>
-              <div className="mt-2 text-sm text-slate-200">
-                passed {caseSummary.passed} · timeout {caseSummary.timeout} · pending {caseSummary.pending}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                unique executed {caseSummary.total_executed} · outcomes {caseSummary.outcomes_generated}
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">当前关注</div>
-              <div className="mt-2 text-sm text-slate-200">
-                {caseSummary.current_workflow || '当前没有活动 workflow，优先做 release/report 对齐。'}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                gate {caseSummary.gate_status} · closure {caseSummary.closure_check_passed ? 'passed' : 'pending'}
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">关键产物</div>
-              <div className="mt-2 space-y-2">
-                {caseSummary.key_artifacts.slice(0, 4).map((artifact) => (
-                  <div key={artifact.path} className="text-xs text-slate-400">
-                    {artifact.category} · {artifact.path}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
+
       </div>
 
       <div className="grid grid-cols-[1.2fr,1fr] gap-6">
@@ -691,7 +1016,7 @@ export default function Simulation() {
             <div>
               <h2 className="text-sm font-semibold text-slate-200">真实 artifacts</h2>
               <p className="mt-1 text-xs text-slate-500">
-                当前案例 {activeProject.caseId} · {executionLoading ? '读取中...' : '来自 cases/contracts 等真实目录'}
+                当前案例 {shellCaseId} · {executionLoading ? '读取中...' : '来自 cases/contracts 等真实目录'}
               </p>
             </div>
             <span className="text-xs text-slate-500">{artifacts.length} 项</span>

@@ -61,7 +61,7 @@ The app detects `window.__TAURI_IPC__` to determine runtime. In browser mode:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **HydroDesk** (214 symbols, 523 relationships, 18 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **HydroDesk** (1413 symbols, 3877 relationships, 114 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

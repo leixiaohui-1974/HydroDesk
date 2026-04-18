@@ -31,16 +31,47 @@ hydrology_know = pathlib.Path('Hydrology/knowledge')
 results = []
 found_ids = set()
 
-names_fallback = {
-  'daduhe': '大渡河梯级',
-  'yinchuo': '引绰济辽',
-  'jiaodong': '胶东调水',
-  'xuhonghe': '徐洪河',
-  'zhongxian': '南水北调中线',
-  'yjdt': '雅鲁藏布江下游(YJDT)',
-  'yinchuojiliao': '引绰济辽',
-  'jiaodongtiaoshui': '胶东调水',
-}
+def humanize_case_id(cid):
+    text = str(cid or '').strip().replace('_', ' ').replace('-', ' ')
+    return text or 'unknown-case'
+
+def manifest_name_from_case_dir(case_dir):
+    for rel in ('manifest.yaml', 'contracts/case_manifest.json'):
+        p = case_dir / rel
+        if not p.exists():
+            continue
+        try:
+            if p.suffix == '.yaml':
+                doc = yaml.safe_load(p.read_text(encoding='utf-8')) or {}
+                case = doc.get('case') or {}
+                for key in ('display_name', 'name'):
+                    val = case.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+            else:
+                doc = json.loads(p.read_text(encoding='utf-8')) or {}
+                for key in ('display_name', 'name'):
+                    val = doc.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+        except Exception:
+            continue
+    return None
+
+def pipedream_display_name(path, stem):
+    try:
+        doc = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
+    except Exception:
+        return humanize_case_id(stem)
+    meta = doc.get('meta') or {}
+    for key in ('display_name', 'name'):
+        val = doc.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    val = meta.get('name')
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return humanize_case_id(stem)
 
 def e2e_summary_exists(cid):
     if not pipedream_cases.exists():
@@ -66,29 +97,19 @@ def push_case(cid, name, prefer_active, source):
 if workspace_cases.exists():
     for mf in sorted(workspace_cases.glob('*/manifest.yaml')):
         cid = mf.parent.name
-        try:
-            doc = yaml.safe_load(mf.read_text(encoding='utf-8')) or {}
-            c = doc.get('case') or {}
-            nm = c.get('display_name') or names_fallback.get(cid, cid)
-        except Exception:
-            nm = names_fallback.get(cid, cid)
+        nm = manifest_name_from_case_dir(mf.parent) or humanize_case_id(cid)
         push_case(cid, nm, True, 'cases_manifest')
 
 if pipedream_cases.exists():
     for f in pipedream_cases.glob('*.yaml'):
         stem = f.stem
         if stem not in found_ids:
-            push_case(stem, names_fallback.get(stem, stem.upper()), False, 'pipedream_yaml')
+            push_case(stem, pipedream_display_name(f, stem), False, 'pipedream_yaml')
 
 if hydrology_know.exists():
     for d in hydrology_know.iterdir():
         if d.is_dir() and d.name not in found_ids:
-            push_case(d.name, d.name, True, 'hydrology_knowledge')
-
-for yj_path in (pathlib.Path('YJDT/src/yjdt'), pathlib.Path('src/yjdt')):
-    if yj_path.exists() and 'yjdt' not in found_ids:
-        push_case('yjdt', names_fallback.get('yjdt', 'yjdt'), False, 'yjdt_src')
-        break
+            push_case(d.name, manifest_name_from_case_dir(workspace_cases / d.name) or humanize_case_id(d.name), True, 'hydrology_knowledge')
 
 print(json.dumps(results))
       `.trim();

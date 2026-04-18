@@ -1,3 +1,5 @@
+import { isPlaywrightBrowserFixtureEnabled } from '../config/playwrightEnvGate';
+
 /**
  * Tauri Bridge - Wrapper for Tauri invoke commands
  *
@@ -10,6 +12,274 @@
  */
 export function isTauri() {
   return typeof window !== 'undefined' && window.__TAURI_IPC__ !== undefined;
+}
+
+function getPlaywrightBrowserFixture() {
+  if (isTauri() || typeof window === 'undefined') {
+    return null;
+  }
+  const explicitFixture = window.__HYDRODESK_PLAYWRIGHT_FIXTURE__ ?? null;
+  if (explicitFixture) {
+    return explicitFixture;
+  }
+  if (!isPlaywrightBrowserFixtureEnabled()) {
+    return null;
+  }
+  return explicitFixture;
+}
+
+export function hasPlaywrightBrowserFixture() {
+  return Boolean(getPlaywrightBrowserFixture());
+}
+
+function buildAcceptanceMeta(fixture, request = {}) {
+  const acceptanceLane = String(fixture?.acceptanceLane ?? '').trim() || 'fixture-pass';
+  const acceptanceSource = acceptanceLane === 'real-runtime-pass' ? 'real-runtime' : 'fixture';
+  const acceptanceEvidence =
+    fixture?.acceptanceEvidence && typeof fixture.acceptanceEvidence === 'object'
+      ? { ...fixture.acceptanceEvidence }
+      : {};
+  const requestCaseId = String(request?.caseId ?? request?.case_id ?? '').trim();
+  if (!acceptanceEvidence.case_id && requestCaseId) {
+    acceptanceEvidence.case_id = requestCaseId;
+  }
+  if (!acceptanceEvidence.lane) {
+    acceptanceEvidence.lane = acceptanceLane;
+  }
+  return {
+    acceptance_lane: acceptanceLane,
+    acceptance_source: acceptanceSource,
+    acceptance_evidence: Object.keys(acceptanceEvidence).length > 0 ? acceptanceEvidence : null,
+  };
+}
+
+function annotateAcceptanceResult(result, fixture, request = {}) {
+  if (!result || Array.isArray(result) || typeof result !== 'object') {
+    return result;
+  }
+  if (Object.prototype.hasOwnProperty.call(result, 'acceptance_lane')) {
+    return result;
+  }
+  return {
+    ...result,
+    ...buildAcceptanceMeta(fixture, request),
+  };
+}
+
+function getFixtureGatewayState(fixture) {
+  if (!fixture || typeof window === 'undefined') {
+    return null;
+  }
+  if (!window.__HYDRODESK_PLAYWRIGHT_GATEWAY_STATE__) {
+    window.__HYDRODESK_PLAYWRIGHT_GATEWAY_STATE__ = {
+      active: false,
+      pid: fixture.gatewaySessionPid ?? 9401,
+    };
+  }
+  return window.__HYDRODESK_PLAYWRIGHT_GATEWAY_STATE__;
+}
+
+function getFixtureGatewayReply(fixture, request = {}) {
+  const op = String(request?.op ?? '').trim();
+  const caseId = String(request?.case_id ?? fixture?.defaultCaseId ?? '').trim();
+  const fallbackTools = Array.isArray(fixture?.gatewayTools) ? fixture.gatewayTools : [];
+  const caseTools =
+    (caseId && Array.isArray(fixture?.gatewayToolsByCase?.[caseId]) && fixture.gatewayToolsByCase[caseId]) ||
+    fallbackTools;
+  const casePolicy =
+    (caseId && fixture?.gatewayPolicyByCase?.[caseId]) ||
+    fixture?.gatewayPolicy || {
+      filter_mode: caseId ? 'case_manifest' : 'full_catalog',
+    };
+
+  switch (op) {
+    case 'ping':
+      return annotateAcceptanceResult({
+        ok: true,
+        pong: true,
+        case_id: caseId || undefined,
+        transport: 'playwright_fixture',
+      }, fixture, { case_id: caseId });
+    case 'list_tools':
+      return annotateAcceptanceResult({
+        ok: true,
+        case_id: caseId || undefined,
+        tools: caseTools,
+        policy: casePolicy,
+      }, fixture, { case_id: caseId });
+    case 'invoke_tool': {
+      const tool = String(request?.tool ?? '').trim();
+      const result =
+        (caseId && fixture?.gatewayInvokeToolByCase?.[caseId]?.[tool]) ||
+        fixture?.gatewayInvokeToolResults?.[tool] || {
+          returncode: 0,
+          stdout: `${tool || 'tool'} fixture completed${caseId ? ` for ${caseId}` : ''}`,
+          stderr: '',
+        };
+      return annotateAcceptanceResult({
+        ok: true,
+        case_id: caseId || undefined,
+        tool,
+        result,
+      }, fixture, { case_id: caseId });
+    }
+    default:
+      return annotateAcceptanceResult({
+        ok: false,
+        error: 'unsupported_fixture_op',
+        detail: `Playwright fixture does not implement op=${op || 'unknown'}`,
+      }, fixture, { case_id: caseId });
+  }
+}
+
+function tokenizeWorkspaceCommand(command) {
+  return String(command ?? '')
+    .match(/'[^']*'|[^\s]+/g)
+    ?.map((token) => token.replace(/^'|'$/g, '')) ?? [];
+}
+
+function getCliArgValue(tokens, flag) {
+  const index = tokens.findIndex((token) => token === flag);
+  if (index < 0 || index + 1 >= tokens.length) {
+    return '';
+  }
+  return tokens[index + 1] ?? '';
+}
+
+function getFixtureCommandResult(command, args, fallback) {
+  const fixture = getPlaywrightBrowserFixture();
+  if (!fixture) {
+    return undefined;
+  }
+
+  switch (command) {
+    case 'get_case_contract_summary':
+      return annotateAcceptanceResult(fixture.caseContractSummaryById?.[args?.caseId] ?? fallback, fixture, {
+        caseId: args?.caseId,
+      });
+    case 'read_workspace_text_file':
+      return fixture.workspaceTexts?.[args?.relPath] ?? fallback;
+    case 'read_workspace_text_file_first_of': {
+      const relPaths = Array.isArray(args?.relPaths) ? args.relPaths : [];
+      for (const relPath of relPaths) {
+        if (fixture.workspaceTexts && Object.prototype.hasOwnProperty.call(fixture.workspaceTexts, relPath)) {
+          return fixture.workspaceTexts[relPath];
+        }
+      }
+      return fallback;
+    }
+    case 'resolve_first_existing_workspace_path': {
+      const relPaths = Array.isArray(args?.relPaths) ? args.relPaths : [];
+      for (const relPath of relPaths) {
+        if (fixture.workspaceTexts && Object.prototype.hasOwnProperty.call(fixture.workspaceTexts, relPath)) {
+          return relPath;
+        }
+      }
+      return fallback;
+    }
+    case 'run_workspace_command': {
+      const commandTokens = tokenizeWorkspaceCommand(args?.command);
+      const caseId = getCliArgValue(commandTokens, '--case-id');
+      const phase = getCliArgValue(commandTokens, '--phase');
+      if (commandTokens.some((token) => token.includes('run_auto_learning_loop.py'))) {
+        const result = fixture.autoModelingRunByCase?.[caseId];
+        return result
+          ? annotateAcceptanceResult({
+              command: args?.command ?? '',
+              status: result.status ?? 0,
+              stdout: result.stdout ?? '',
+              stderr: result.stderr ?? '',
+              success: Boolean(result.success),
+            }, fixture, { caseId })
+          : fallback;
+      }
+      if (phase === 'simulation' && fixture.preflightByCase?.[caseId]) {
+        return annotateAcceptanceResult({
+          command: args?.command ?? '',
+          status: 0,
+          stdout: JSON.stringify(fixture.preflightByCase[caseId]),
+          stderr: '',
+          success: true,
+        }, fixture, { caseId });
+      }
+      return fallback;
+    }
+    case 'agent_loop_gateway_oneshot': {
+      const response = getFixtureGatewayReply(fixture, args?.request);
+      return annotateAcceptanceResult({
+        success: response?.ok !== false,
+        returnCode: response?.ok === false ? 1 : 0,
+        response,
+        stderr: '',
+        rawStdout: JSON.stringify(response),
+      }, fixture, args?.request);
+    }
+    case 'agent_loop_gateway_session_start': {
+      const state = getFixtureGatewayState(fixture);
+      state.active = true;
+      return annotateAcceptanceResult({
+        active: true,
+        pid: state.pid,
+      }, fixture, { case_id: fixture?.defaultCaseId });
+    }
+    case 'agent_loop_gateway_session_send': {
+      const state = getFixtureGatewayState(fixture);
+      let request = null;
+      try {
+        request = JSON.parse(String(args?.line ?? ''));
+      } catch {
+        return {
+          active: Boolean(state?.active),
+          pid: state?.pid ?? null,
+          stderr: 'invalid_json_line',
+        };
+      }
+      const response = getFixtureGatewayReply(fixture, request);
+      return annotateAcceptanceResult({
+        active: Boolean(state?.active),
+        pid: state?.pid ?? null,
+        line: JSON.stringify(response),
+        stderr: '',
+      }, fixture, request);
+    }
+    case 'agent_loop_gateway_session_stop': {
+      const state = getFixtureGatewayState(fixture);
+      state.active = false;
+      return annotateAcceptanceResult({
+        active: false,
+        pid: null,
+      }, fixture, { case_id: fixture?.defaultCaseId });
+    }
+    case 'agent_loop_gateway_session_status': {
+      const state = getFixtureGatewayState(fixture);
+      return annotateAcceptanceResult({
+        active: Boolean(state?.active),
+        pid: state?.active ? state.pid : null,
+      }, fixture, { case_id: fixture?.defaultCaseId });
+    }
+    case 'start_hydrology_workflow':
+      return annotateAcceptanceResult(
+        fixture.workflowLaunchByCase?.[args?.caseId]?.[args?.workflowName] ?? fallback,
+        fixture,
+        { caseId: args?.caseId },
+      );
+    case 'get_case_artifacts':
+      return fixture.caseArtifactsById?.[args?.caseId] ?? fallback;
+    case 'get_execution_history':
+      return fixture.executionHistory ?? fallback;
+    case 'get_context_checkpoints':
+      return fixture.contextCheckpoints ?? fallback;
+    case 'get_log_tail':
+      return fixture.logTailByFile?.[args?.logFile] ?? fallback;
+    case 'stop_process':
+      return fixture.stopProcessResult ?? false;
+    case 'get_hydrology_workflows':
+      return fixture.hydrologyWorkflows ?? fallback;
+    case 'get_runtime_snapshot':
+      return fixture.runtimeSnapshot ?? fallback;
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -27,12 +297,30 @@ async function getInvoke() {
  * @param {object} args - Arguments to pass to the command
  * @param {*} fallback - Fallback value for browser mode
  */
-export async function invokeCommand(command, args = {}, fallback = null) {
+export async function invokeCommand(command, args = {}, fallback = null, timeoutMs = 0) {
+  const fixtureResult = getFixtureCommandResult(command, args, fallback);
+  if (fixtureResult !== undefined) {
+    return fixtureResult;
+  }
+
   const invoke = await getInvoke();
   if (!invoke) {
     console.warn(`[TauriBridge] Not in Tauri environment, returning fallback for: ${command}`);
     return fallback;
   }
+  
+  if (timeoutMs > 0) {
+    return Promise.race([
+      invoke(command, args).catch((err) => {
+        console.error(`[TauriBridge] Command failed: ${command}`, err);
+        throw err;
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Tauri command ${command} timed out after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+  }
+
   try {
     return await invoke(command, args);
   } catch (err) {
@@ -114,7 +402,7 @@ export async function probeHydrodeskAgentBackend(fallback = null) {
 
 /**
  * agent_loop_gateway.py --oneshot：传一行 JSON 请求，返回解析后的 stdout JSON（无 shell 拼接）。
- * @param {Record<string, unknown>} request 如 { op: 'ping' }、{ op: 'list_tools', case_id: 'daduhe' }
+ * @param {Record<string, unknown>} request 如 { op: 'ping' }、{ op: 'list_tools', case_id: '<case_id>' }
  */
 export async function agentLoopGatewayOneshot(request, fallback = null) {
   return invokeCommand(
@@ -140,16 +428,17 @@ export async function agentLoopGatewaySessionStart(fallback = null) {
     'agent_loop_gateway_session_start',
     {},
     fallback ?? { active: false, pid: null },
+    10000 // 10s timeout for start
   );
 }
 
 /** 向常驻网关写入一行 NDJSON（勿含换行）。 */
 export async function agentLoopGatewaySessionSend(line, fallback = undefined) {
-  return invokeCommand('agent_loop_gateway_session_send', { line }, fallback);
+  return invokeCommand('agent_loop_gateway_session_send', { line }, fallback, 5000); // 5s timeout for send
 }
 
 export async function agentLoopGatewaySessionStop(fallback = undefined) {
-  return invokeCommand('agent_loop_gateway_session_stop', {}, fallback);
+  return invokeCommand('agent_loop_gateway_session_stop', {}, fallback, 5000); // 5s timeout
 }
 
 export async function agentLoopGatewaySessionStatus(fallback = null) {
@@ -157,6 +446,7 @@ export async function agentLoopGatewaySessionStatus(fallback = null) {
     'agent_loop_gateway_session_status',
     {},
     fallback ?? { active: false, pid: null },
+    2000 // 2s timeout
   );
 }
 
@@ -197,10 +487,6 @@ export async function deletePath(targetPath, fallback = false) {
 }
 
 export async function runWorkspaceCommand(command, cwd, fallback = null) {
-  if (!isTauri()) {
-    console.warn("[HydroDesk] runWorkspaceCommand 仅在 Tauri 桌面环境中可用。请运行 `npm run tauri dev`。");
-    return fallback;
-  }
   return invokeCommand('run_workspace_command', { command, cwd }, fallback);
 }
 
@@ -217,6 +503,22 @@ export async function writeWorkspaceTextFile(relPath, content, fallback = null) 
 /** 仓库根相对路径是否存在（禁止 `..`）；非 Tauri 返回 fallback。 */
 export async function workspacePathExists(relPath, fallback = false) {
   return invokeCommand('workspace_path_exists', { relPath }, fallback);
+}
+
+export async function caseManagerOpenDirectory(dirPath, fallback = []) {
+  return invokeCommand('case_manager_open_directory', { dirPath }, fallback);
+}
+
+export async function createCase(caseId, displayName, projectType = null, fallback = false) {
+  return invokeCommand('create_case', { caseId, displayName, projectType }, fallback);
+}
+
+export async function deriveCase(sourceCaseId, newCaseId, displayName, fallback = false) {
+  return invokeCommand('derive_case', { sourceCaseId, newCaseId, displayName }, fallback);
+}
+
+export async function archiveCase(caseId, fallback = false) {
+  return invokeCommand('archive_case', { caseId }, fallback);
 }
 
 /** 按顺序返回第一个存在的仓库根相对路径，否则 null；非 Tauri 返回 fallback。 */

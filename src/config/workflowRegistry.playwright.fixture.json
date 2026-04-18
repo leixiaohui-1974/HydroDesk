@@ -21,6 +21,13 @@
     ]
   },
   {
+    "name": "business_run_digest",
+    "description": "业务向运行结果汇编（hydromind 六类契约+拓扑样本+运行期对象+工作流与精度摘录）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
     "name": "calibrate",
     "description": "逐站率定验证",
     "required_args": [
@@ -58,48 +65,6 @@
   {
     "name": "d1d4",
     "description": "D1-D4 全维度精度分析报告",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_ekf_mpc_ext",
-    "description": "大渡河 EKF+MPC（legacy 包装 run_ekf_mpc）",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_full_pipeline_ext",
-    "description": "大渡河 pipedream 全链路 pipeline（legacy 脚本）",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_historical_validation_ext",
-    "description": "大渡河历史年景验证（legacy）",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_hydro_coupling_ext",
-    "description": "水文→水力耦合（承接 daduhe_hydro_coupling_ext 注册键，等价 coupled）",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_pipedream_ext",
-    "description": "大渡河 SuperLink 仿真闭环（legacy）",
-    "required_args": [
-      "case_id"
-    ]
-  },
-  {
-    "name": "daduhe_real_validation_ext",
-    "description": "大渡河真实验证入口（legacy 包装 run_real_validation）",
     "required_args": [
       "case_id"
     ]
@@ -217,6 +182,13 @@
     ]
   },
   {
+    "name": "object_topology_report",
+    "description": "刷新标准水对象拓扑样本与 combined_object_topology_report（contract_adapters）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
     "name": "mrc_rehearsal_ext",
     "description": "MRC 四态机演练（pipedream）",
     "required_args": [
@@ -259,6 +231,13 @@
     ]
   },
   {
+    "name": "source_sync",
+    "description": "源注册与共享 Wiki 投影（raw source → contracts → wiki）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
     "name": "source_to_delineation",
     "description": "端到端地形链路（源发现→数据包→流域划分）",
     "required_args": [
@@ -289,6 +268,13 @@
   {
     "name": "wxq_mine",
     "description": "WXQ 模型知识挖掘（knowledge_mine 别名，供 MCP/E2E 主键一致）",
+    "required_args": [
+      "case_id"
+    ]
+  },
+  {
+    "name": "wxq_sync",
+    "description": "WXQ 源注册与共享 Wiki 投影兼容键（等价 source_sync）",
     "required_args": [
       "case_id"
     ]

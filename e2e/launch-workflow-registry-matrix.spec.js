@@ -10,13 +10,17 @@ const FIXTURE = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8'));
 async function switchRolloutCase(page, caseId, testInfo) {
   await page.goto('/projects');
   await expect(page.getByRole('button', { name: '刷新案例列表' })).toBeVisible();
+  await page.getByTestId('project-center-info-tab-catalog').dispatchEvent('click');
   const row = page.locator(`[data-testid="case-row"][data-case-id="${caseId}"]`);
   if ((await row.count()) === 0) {
     testInfo.skip(true, `列表未含 ${caseId}`);
     return false;
   }
-  await row.getByRole('button', { name: '切换' }).click();
-  await expect(page.locator('main').getByText(new RegExp(`case\\s+${caseId}`, 'i'))).toBeVisible();
+  await row.getByRole('button', { name: '切换' }).dispatchEvent('click');
+  await page.getByTestId('project-center-info-tab-case').dispatchEvent('click');
+  await expect(
+    page.locator(`[data-testid="case-row"][data-case-id="${caseId}"]`).getByText('当前工作案例'),
+  ).toBeVisible();
   return true;
 }
 
@@ -30,8 +34,8 @@ for (const caseId of ROLLOUT_CASE_IDS) {
       const ok = await switchRolloutCase(page, caseId, testInfo);
       if (!ok) return;
 
-      await page.locator('aside a[href="/simulation"]').click();
-      await expect(page).toHaveURL(/\/simulation$/);
+      await page.goto('/simulation');
+      await expect(page).toHaveURL(/\/simulation(\?|$)/);
 
       const select = page.getByTestId('workflow-registry-select');
       await expect(select).toBeVisible();

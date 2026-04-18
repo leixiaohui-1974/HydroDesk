@@ -21,63 +21,85 @@ export const executionSurfaceCatalog = {
   },
 };
 
-const externalWorkflowMap = {
-  daduhe_pipedream_ext: {
-    ownerProject: 'pipedream-hydrology-integration-lab',
-    ownerAgent: '管线 / 运行时编排',
-    primarySurface: 'product',
-    supportSurfaces: ['agent', 'mcp'],
-    rationale: '闭环仿真和 SuperLink 求解要保留在 pipedream 产品层，HydroDesk 只做编排与可视化。',
+const externalWorkflowRules = [
+  {
+    matches: (workflow) => workflow === 'strict_revalidation_ext',
+    detail: {
+      ownerProject: 'E2EControl',
+      ownerAgent: '验模 / 严格复核',
+      primarySurface: 'product',
+      supportSurfaces: ['agent', 'mcp'],
+      rationale: '严格复核属于验收 gate，应该由 E2EControl 负责执行与产出 summary。',
+    },
   },
-  strict_revalidation_ext: {
-    ownerProject: 'E2EControl',
-    ownerAgent: '验模 / 严格复核',
-    primarySurface: 'product',
-    supportSurfaces: ['agent', 'mcp'],
-    rationale: '严格复核属于验收 gate，应该由 E2EControl 负责执行与产出 summary。',
+  {
+    matches: (workflow) => workflow === 'hil_acceptance_test_ext',
+    detail: {
+      ownerProject: 'HIL',
+      ownerAgent: '闭环 / FAT',
+      primarySurface: 'product',
+      supportSurfaces: ['agent'],
+      rationale: '数字 FAT 是标准验收流程，HydroDesk 负责展示结果，不重写 HIL 试验逻辑。',
+    },
   },
-  hil_acceptance_test_ext: {
-    ownerProject: 'HIL',
-    ownerAgent: '闭环 / FAT',
-    primarySurface: 'product',
-    supportSurfaces: ['agent'],
-    rationale: '数字 FAT 是标准验收流程，HydroDesk 负责展示结果，不重写 HIL 试验逻辑。',
+  {
+    matches: (workflow) => workflow.endsWith('_pipedream_ext'),
+    detail: {
+      ownerProject: 'pipedream-hydrology-integration-lab',
+      ownerAgent: '管线 / 运行时编排',
+      primarySurface: 'product',
+      supportSurfaces: ['agent', 'mcp'],
+      rationale: '闭环仿真和求解链保留在 pipedream 产品层，HydroDesk 只做编排与可视化。',
+    },
   },
-  daduhe_ekf_mpc_ext: {
-    ownerProject: 'E2EControl',
-    ownerAgent: '驭控 / EKF-MPC',
-    primarySurface: 'product',
-    supportSurfaces: ['agent', 'mcp'],
-    rationale: '控制律与校核应由控制产品层承担，Agent 只提供 supervision 与建议。',
+  {
+    matches: (workflow) => workflow.endsWith('_ekf_mpc_ext'),
+    detail: {
+      ownerProject: 'E2EControl',
+      ownerAgent: '驭控 / EKF-MPC',
+      primarySurface: 'product',
+      supportSurfaces: ['agent', 'mcp'],
+      rationale: '控制律与校核应由控制产品层承担，Agent 只提供 supervision 与建议。',
+    },
   },
-  daduhe_historical_validation_ext: {
-    ownerProject: 'E2EControl',
-    ownerAgent: '验模 / 历史验证',
-    primarySurface: 'product',
-    supportSurfaces: ['agent'],
-    rationale: '历史验证是标准验证工步，适合做严格的产品化产出和回归。',
+  {
+    matches: (workflow) => workflow.endsWith('_historical_validation_ext'),
+    detail: {
+      ownerProject: 'E2EControl',
+      ownerAgent: '验模 / 历史验证',
+      primarySurface: 'product',
+      supportSurfaces: ['agent'],
+      rationale: '历史验证是标准验证工步，适合做严格的产品化产出和回归。',
+    },
   },
-  daduhe_real_validation_ext: {
-    ownerProject: 'E2EControl',
-    ownerAgent: '验模 / 实时验证',
-    primarySurface: 'product',
-    supportSurfaces: ['agent'],
-    rationale: '实时验证需要和控制链、数据链保持一致，应该留在控制产品面。',
+  {
+    matches: (workflow) => workflow.endsWith('_real_validation_ext'),
+    detail: {
+      ownerProject: 'E2EControl',
+      ownerAgent: '验模 / 实时验证',
+      primarySurface: 'product',
+      supportSurfaces: ['agent'],
+      rationale: '实时验证需要和控制链、数据链保持一致，应该留在控制产品面。',
+    },
   },
-  daduhe_full_pipeline_ext: {
-    ownerProject: 'Hydrology',
-    ownerAgent: '管线 / 全流程',
-    primarySurface: 'product',
-    supportSurfaces: ['agent', 'skill', 'mcp'],
-    rationale: '这是跨模块但仍可重复执行的产品化主链，HydroDesk 适合一键触发与监控。',
+  {
+    matches: (workflow) => workflow.endsWith('_full_pipeline_ext'),
+    detail: {
+      ownerProject: 'Hydrology',
+      ownerAgent: '管线 / 全流程',
+      primarySurface: 'product',
+      supportSurfaces: ['agent', 'skill', 'mcp'],
+      rationale: '这是跨模块但仍可重复执行的产品化主链，HydroDesk 适合一键触发与监控。',
+    },
   },
-};
+];
 
 function familySurface(workflowName) {
   const workflow = workflowName || '';
 
-  if (externalWorkflowMap[workflow]) {
-    return externalWorkflowMap[workflow];
+  const externalRule = externalWorkflowRules.find((rule) => rule.matches(workflow));
+  if (externalRule) {
+    return externalRule.detail;
   }
   if (['data_audit', 'deep_record', 'registry', 'wxq_mine', 'knowledge_split'].includes(workflow)) {
     return {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { openPath, openPathWithAlternates, revealPath, revealPathWithAlternates } from '../api/tauri_bridge';
+import { openPath, revealPath } from '../api/tauri_bridge';
 import useTauri from '../hooks/useTauri';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 import {
@@ -11,10 +11,11 @@ import {
 } from '../data/notebookArtifacts';
 import {
   getCaseReviewAssets,
-  getCaseRunReviewReleaseContracts,
   getCaseShellEntryPoints,
   resolveShellCaseId,
 } from '../data/case_contract_shell';
+import { useCaseRunReviewReleaseContracts } from '../hooks/useCaseRunReviewReleaseContracts';
+import { usePlatformGovernanceGates } from '../hooks/usePlatformGovernanceGates';
 
 const notebookSections = [
   { key: 'baseline', title: '基线与上下文' },
@@ -40,7 +41,7 @@ export default function NotebookWorkspace() {
   const reviewMemoPath = `cases/${shellCaseId}/contracts/hydrodesk_review_memo.latest.md`;
   const releaseNotePath = `cases/${shellCaseId}/contracts/hydrodesk_release_note.latest.md`;
   const reviewAssets = useMemo(() => getCaseReviewAssets(shellCaseId), [shellCaseId]);
-  const contracts = useMemo(() => getCaseRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
+  const contracts = useCaseRunReviewReleaseContracts(shellCaseId);
   const entryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
   const releaseEvidenceAssets = useMemo(
     () => [
@@ -52,6 +53,7 @@ export default function NotebookWorkspace() {
     ].filter(Boolean),
     [contracts, notebookJsonPath, notebookMarkdownPath, releaseNotePath, reviewAssets, reviewMemoPath]
   );
+  const { rows: governanceGates } = usePlatformGovernanceGates(shellCaseId);
   const [activeSection, setActiveSection] = useState('baseline');
   const [notes, setNotes] = useState(() => buildDefaultNotes(shellCaseId, activeProject.name));
   const [metadata, setMetadata] = useState(() => buildDefaultNotebookMetadata());
@@ -160,7 +162,7 @@ export default function NotebookWorkspace() {
     const content =
       kind === 'review'
         ? buildSharedReviewMemoMarkdown(shellCaseId, activeProject.name, notes, contracts, reviewAssets, metadata)
-        : buildSharedReleaseNoteMarkdown(shellCaseId, activeProject.name, notes, contracts, metadata, releaseEvidenceAssets);
+        : buildSharedReleaseNoteMarkdown(shellCaseId, activeProject.name, notes, contracts, metadata, releaseEvidenceAssets, governanceGates);
 
     setGeneratingMemo(true);
     try {
@@ -351,17 +353,25 @@ export default function NotebookWorkspace() {
               <div className="mt-3 text-[11px] text-slate-500">{contract.path}</div>
               <div className="mt-3 flex items-center gap-2">
                 <button
-                  onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
+                  onClick={() => openPath(contract.path)}
                   className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
                 >
                   打开
                 </button>
                 <button
-                  onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
+                  onClick={() => revealPath(contract.path)}
                   className="rounded-lg border border-slate-700/40 bg-slate-900/50 px-3 py-2 text-xs text-slate-300"
                 >
                   定位
                 </button>
+                {contract.bridgePath ? (
+                  <button
+                    onClick={() => openPath(contract.bridgePath)}
+                    className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+                  >
+                    打开 Bridge
+                  </button>
+                ) : null}
                 <button
                   onClick={() => appendNote(`- ${contract.stage} / ${contract.contractName}: ${contract.path}`)}
                   className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"

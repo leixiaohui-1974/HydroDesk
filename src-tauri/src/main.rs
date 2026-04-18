@@ -76,6 +76,14 @@ struct DuplicateRunSummary {
     count: u64,
 }
 
+#[derive(Serialize, Default, Clone)]
+struct FailedWorkflowSummary {
+    workflow: String,
+    status: String,
+    category: String,
+    message: String,
+}
+
 #[derive(Serialize, Default)]
 struct CaseContractSummary {
     case_id: String,
@@ -85,6 +93,7 @@ struct CaseContractSummary {
     failed: u64,
     timeout: u64,
     pending: u64,
+    failed_workflows: Vec<FailedWorkflowSummary>,
     current_workflow: String,
     outcomes_generated: u64,
     raw_outcome_coverage: f64,
@@ -104,6 +113,14 @@ struct CaseContractSummary {
     triad_release_manifest_rel: String,
     /// 0–3
     triad_count: u8,
+    triad_placeholder_count: u8,
+    triad_real_count: u8,
+    triad_status: String,
+    triad_truth_status: String,
+    triad_canonical_count: u8,
+    triad_bridge_fallback_count: u8,
+    pipeline_minimal_contract_ready: bool,
+    pipeline_contract_ready: bool,
     release_gate_eligible: bool,
     release_gate_blockers: Vec<String>,
     /// `contracts/delivery_pack.latest.json` 存在时的仓库相对路径
@@ -114,6 +131,18 @@ struct CaseContractSummary {
     delivery_pack_updated_at: String,
     /// 指针文件内 `eligible_at_pack_time`
     delivery_pack_eligible_at_last_pack: bool,
+    final_report_present: bool,
+    final_report_path: String,
+    final_report_generated_at: String,
+    final_report_status: String,
+    final_report_release_board_status: String,
+    final_report_promotion_status: String,
+    final_report_review_verdict: String,
+    final_report_release_status: String,
+    final_report_assertion_total: u64,
+    final_report_assertion_passed: u64,
+    final_report_acceptance_scope: String,
+    final_report_acceptance_source: String,
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -387,6 +416,15 @@ fn system_time_string(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn json_rel_file_exists(repo_root: &Path, value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(|raw| raw.as_str())
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| repo_root.join(raw).is_file())
+        .unwrap_or(false)
+}
+
 fn parse_workflow_template_mapping(content: &str) -> WorkflowTemplateMapping {
     let mut mapping = WorkflowTemplateMapping::default();
     let mut section = String::new();
@@ -601,6 +639,32 @@ fn resolve_contract_triad_member_rel(contracts_dir: &Path, base: &str) -> String
         return repo_relative_string(&contract_path);
     }
     String::new()
+}
+
+fn triad_member_is_placeholder(rel_path: &str) -> bool {
+    if rel_path.trim().is_empty() {
+        return false;
+    }
+    let path = resolve_repo_relative(rel_path);
+    let payload = read_json_value(&path).unwrap_or_default();
+    let bootstrap = payload
+        .get("_bootstrap")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let metadata_bootstrap = payload
+        .pointer("/metadata/_bootstrap")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let auto_generated = payload
+        .get("_auto_generated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    auto_generated
+        && (bootstrap == "minimal_triad_placeholder" || metadata_bootstrap == "minimal_triad_placeholder")
+}
+
+fn triad_member_uses_bridge_fallback(rel_path: &str) -> bool {
+    rel_path.trim().ends_with(".contract.json")
 }
 
 fn resolve_repo_relative(path: &str) -> PathBuf {
@@ -900,6 +964,43 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         }
     }
 
+    let mut failed_workflows = Vec::new();
+    if let Some(records) = progress.get("records").and_then(|value| value.as_array()) {
+        for record in records {
+            let status = record.get("status").and_then(|value| value.as_str()).unwrap_or("unknown");
+            if status == "failed" || status == "timeout" || status == "error" {
+                let workflow = record.get("workflow_key").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                let excerpt = record.get("excerpt").and_then(|v| v.as_str()).unwrap_or("");
+                
+                // Classify error type based on excerpt heuristics
+                let category = if status == "timeout" || excerpt.to_lowercase().contains("timeout") {
+                    "timeout".to_string()
+                } else if excerpt.to_lowercase().contains("environment") || excerpt.to_lowercase().contains("docker") || excerpt.to_lowercase().contains("container") || excerpt.to_lowercase().contains("command not found") {
+                    "environment".to_string()
+                } else if excerpt.to_lowercase().contains("gate") || excerpt.to_lowercase().contains("assertion") || excerpt.to_lowercase().contains("threshold") {
+                    "gate".to_string()
+                } else if excerpt.to_lowercase().contains("data") || excerpt.to_lowercase().contains("json") || excerpt.to_lowercase().contains("parse") || excerpt.to_lowercase().contains("missing") {
+                    "data".to_string()
+                } else {
+                    "unknown".to_string()
+                };
+
+                let message = if excerpt.len() > 200 {
+                    format!("{}...", &excerpt[..197])
+                } else {
+                    excerpt.to_string()
+                };
+
+                failed_workflows.push(FailedWorkflowSummary {
+                    workflow,
+                    status: status.to_string(),
+                    category,
+                    message,
+                });
+            }
+        }
+    }
+
     let key_artifact_paths = [
         ("dashboard-md", contracts_dir.join("E2E_LIVE_DASHBOARD.md")),
         ("dashboard-html", contracts_dir.join("E2E_LIVE_DASHBOARD.html")),
@@ -936,15 +1037,79 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
     let tri_rb = resolve_contract_triad_member_rel(&contracts_dir, "review_bundle");
     let tri_rm = resolve_contract_triad_member_rel(&contracts_dir, "release_manifest");
     let mut triad_count: u8 = 0;
+    let mut triad_placeholder_count: u8 = 0;
     if !tri_wr.is_empty() {
         triad_count += 1;
+        if triad_member_is_placeholder(&tri_wr) {
+            triad_placeholder_count += 1;
+        }
     }
     if !tri_rb.is_empty() {
         triad_count += 1;
+        if triad_member_is_placeholder(&tri_rb) {
+            triad_placeholder_count += 1;
+        }
     }
     if !tri_rm.is_empty() {
         triad_count += 1;
+        if triad_member_is_placeholder(&tri_rm) {
+            triad_placeholder_count += 1;
+        }
     }
+    let triad_real_count = triad_count.saturating_sub(triad_placeholder_count);
+    let mut triad_bridge_fallback_count: u8 = 0;
+    for rel in [&tri_wr, &tri_rb, &tri_rm] {
+        if triad_member_uses_bridge_fallback(rel) {
+            triad_bridge_fallback_count += 1;
+        }
+    }
+    let triad_canonical_count = triad_count.saturating_sub(triad_bridge_fallback_count);
+    let triad_status = if triad_count == 0 {
+        "missing".to_string()
+    } else if triad_placeholder_count == triad_count {
+        "placeholder_only".to_string()
+    } else if triad_placeholder_count > 0 {
+        "mixed".to_string()
+    } else {
+        "real".to_string()
+    };
+    let triad_truth_status = if triad_real_count == 3 {
+        "real_ready".to_string()
+    } else if triad_real_count > 0 {
+        "partial_real".to_string()
+    } else if triad_placeholder_count > 0 {
+        "placeholder_only".to_string()
+    } else {
+        "missing".to_string()
+    };
+
+    let data_pack_path_candidates = [
+        contracts_dir.join("data_pack.latest.json"),
+        contracts_dir.join("data_pack.contract.json"),
+        contracts_dir.join("data_pack.v2.json"),
+    ];
+    let data_pack = data_pack_path_candidates
+        .iter()
+        .find_map(|path| if path.is_file() { read_json_value(path) } else { None })
+        .unwrap_or_default();
+    let workflow_outputs_count = progress
+        .pointer("/summary/outcomes_generated")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| coverage.get("outcomes_generated").and_then(|value| value.as_u64()).unwrap_or_default());
+    let workflow_outputs_ready = workflow_outputs_count > 0;
+    let data_pack_basin_validation_present = json_rel_file_exists(
+        &repo_root(),
+        data_pack.pointer("/review_gates/basin_validation_json"),
+    );
+    let source_bundle_present = json_rel_file_exists(&repo_root(), data_pack.get("source_bundle_json"));
+    let delineation_present = ["delineation.latest.json", "watershed_delineation_result.latest.json"]
+        .iter()
+        .any(|name| contracts_dir.join(name).is_file());
+    let hydrology_sim_present = contracts_dir.join("hydrology_sim.latest.json").is_file();
+    let pipeline_minimal_contract_ready =
+        workflow_outputs_ready && data_pack_basin_validation_present && source_bundle_present;
+    let pipeline_contract_ready =
+        pipeline_minimal_contract_ready && delineation_present && hydrology_sim_present;
 
     let mut release_gate_blockers: Vec<String> = Vec::new();
     if tri_wr.is_empty() {
@@ -967,6 +1132,21 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
     }
     if gate_status_str == "blocked" {
         release_gate_blockers.push("outcome_coverage_report gate_status=blocked".to_string());
+    }
+    if triad_bridge_fallback_count > 0 {
+        release_gate_blockers.push(format!(
+            "triad 仍使用 bridge fallback（.contract.json {} 项）",
+            triad_bridge_fallback_count
+        ));
+    }
+    if !pipeline_contract_ready {
+        release_gate_blockers.push("pipeline_contract_ready=false（主链真相未闭合）".to_string());
+    }
+    if triad_truth_status != "real_ready" {
+        release_gate_blockers.push(format!(
+            "triad_truth_status={}（bootstrap/混合 triad 不等于真实主链）",
+            triad_truth_status
+        ));
     }
     let release_gate_eligible = release_gate_blockers.is_empty();
 
@@ -1001,6 +1181,86 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         }
     }
 
+    let final_report_path = contracts_dir.join("final_report.latest.json");
+    let final_report_present = final_report_path.is_file();
+    let final_report = if final_report_present {
+        read_json_value(&final_report_path).unwrap_or_default()
+    } else {
+        serde_json::Value::Null
+    };
+    let final_report_path_rel = if final_report_present {
+        repo_relative_string(&final_report_path)
+    } else {
+        String::new()
+    };
+    let final_report_generated_at = final_report
+        .get("generated_at")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let final_report_status = final_report
+        .get("overall_status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let final_report_release_board_status = final_report
+        .pointer("/readiness/release_board/status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let final_report_promotion_status = final_report_release_board_status.clone();
+    let final_report_review_verdict = final_report
+        .pointer("/review/verdict")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let final_report_release_status = final_report
+        .pointer("/release/status")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let final_report_assertion_total = final_report
+        .pointer("/assertion_summary/total")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_else(|| {
+            final_report
+                .get("assertions")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len() as u64)
+                .unwrap_or_default()
+        });
+    let final_report_assertion_passed = final_report
+        .pointer("/assertion_summary/passed")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    let final_report_acceptance_source = final_report
+        .get("assertions")
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                if item
+                    .get("key")
+                    .and_then(|value| value.as_str())
+                    == Some("release_gate_not_blocked")
+                {
+                    item.get("source").and_then(|value| value.as_str())
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_default()
+        .to_string();
+    let final_report_acceptance_scope = if final_report_present {
+        final_report
+            .get("acceptance_scope")
+            .and_then(|value| value.as_str())
+            .unwrap_or("missing")
+            .to_string()
+    } else {
+        String::new()
+    };
+
     Ok(CaseContractSummary {
         case_id: case_id.clone(),
         case_root: repo_relative_string(&case_dir),
@@ -1015,10 +1275,7 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
             .and_then(|value| value.as_str())
             .unwrap_or_default()
             .to_string(),
-        outcomes_generated: progress
-            .pointer("/summary/outcomes_generated")
-            .and_then(|value| value.as_u64())
-            .unwrap_or_else(|| coverage.get("outcomes_generated").and_then(|value| value.as_u64()).unwrap_or_default()),
+        outcomes_generated: workflow_outputs_count,
         raw_outcome_coverage: progress
             .pointer("/summary/outcome_coverage")
             .and_then(|value| value.as_f64())
@@ -1032,11 +1289,20 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         closure_check_passed,
         duplicate_runs,
         pending_workflows,
+        failed_workflows,
         key_artifacts,
         triad_workflow_run_rel: tri_wr,
         triad_review_bundle_rel: tri_rb,
         triad_release_manifest_rel: tri_rm,
         triad_count,
+        triad_placeholder_count,
+        triad_real_count,
+        triad_status,
+        triad_truth_status,
+        triad_canonical_count,
+        triad_bridge_fallback_count,
+        pipeline_minimal_contract_ready,
+        pipeline_contract_ready,
         release_gate_eligible,
         release_gate_blockers,
         delivery_pack_pointer_rel,
@@ -1044,6 +1310,18 @@ fn get_case_contract_summary(case_id: String) -> Result<CaseContractSummary, Str
         delivery_pack_id,
         delivery_pack_updated_at,
         delivery_pack_eligible_at_last_pack,
+        final_report_present,
+        final_report_path: final_report_path_rel,
+        final_report_generated_at,
+        final_report_status,
+        final_report_release_board_status,
+        final_report_promotion_status,
+        final_report_review_verdict,
+        final_report_release_status,
+        final_report_assertion_total,
+        final_report_assertion_passed,
+        final_report_acceptance_scope,
+        final_report_acceptance_source,
     })
 }
 
@@ -1430,6 +1708,122 @@ fn assert_workspace_command_safety(command: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{assert_workspace_command_safety, get_case_contract_summary, repo_root};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn assert_workspace_command_safety_rejects_empty_or_whitespace() {
+        assert!(assert_workspace_command_safety("").is_err());
+        assert!(assert_workspace_command_safety("   \n\t  ").is_err());
+    }
+
+    #[test]
+    fn assert_workspace_command_safety_rejects_nul_byte() {
+        let command = "echo\0hello";
+        assert!(assert_workspace_command_safety(command).is_err());
+    }
+
+    #[test]
+    fn assert_workspace_command_safety_rejects_backtick_substitution() {
+        let command = "echo `whoami`";
+        assert!(assert_workspace_command_safety(command).is_err());
+    }
+
+    #[test]
+    fn assert_workspace_command_safety_rejects_dollar_paren_substitution() {
+        let command = "echo $(whoami)";
+        assert!(assert_workspace_command_safety(command).is_err());
+    }
+
+    #[test]
+    fn assert_workspace_command_safety_allows_normal_commands() {
+        assert!(assert_workspace_command_safety("echo hello").is_ok());
+        assert!(assert_workspace_command_safety("rg --line-number --fixed-strings 'Hydrology' HydroDesk/src").is_ok());
+    }
+
+    #[test]
+    fn get_case_contract_summary_reports_final_report_acceptance_scope_and_source() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let case_id = format!("tmp_p3_task3_case_{unique}");
+        let case_dir = repo_root().join("cases").join(&case_id);
+        let contracts_dir = case_dir.join("contracts");
+        fs::create_dir_all(&contracts_dir).unwrap();
+
+        fs::write(
+            contracts_dir.join("outcome_coverage_report.latest.json"),
+            r#"{
+  "gate_status": "needs-review",
+  "outcomes_generated": 3,
+  "total_executed": 4,
+  "outcome_coverage": 0.75,
+  "schema_valid_count": 3,
+  "evidence_bound_count": 2
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            contracts_dir.join("e2e_outcome_verification_report.json"),
+            r#"{
+  "generated_at": "2026-04-12T09:54:14Z",
+  "stage2_execution_integrity": {
+    "closure_check_passed": true,
+    "pending_workflows": []
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            contracts_dir.join("final_report.latest.json"),
+            r#"{
+  "generated_at": "2026-04-12T09:54:14Z",
+  "overall_status": "attention_required",
+  "review": { "verdict": "pass_with_comments" },
+  "release": { "status": "review_pending" },
+  "readiness": {
+    "release_board": {
+      "status": "needs-review"
+    }
+  },
+  "assertion_summary": {
+    "total": 2,
+    "passed": 1
+  },
+  "assertions": [
+    {
+      "key": "release_gate_not_blocked",
+      "passed": true,
+      "source": "rollout_readiness_baseline.readiness_release_board.cases[].release_gate.status"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let summary = get_case_contract_summary(case_id.clone()).unwrap();
+
+        assert_eq!(summary.case_id, case_id);
+        assert_eq!(summary.final_report_status, "attention_required");
+        assert_eq!(summary.final_report_release_board_status, "needs-review");
+        assert_eq!(summary.final_report_review_verdict, "pass_with_comments");
+        assert_eq!(summary.final_report_release_status, "review_pending");
+        assert_eq!(summary.final_report_assertion_total, 2);
+        assert_eq!(summary.final_report_assertion_passed, 1);
+        assert_eq!(summary.final_report_acceptance_scope, "missing");
+        assert_eq!(
+            summary.final_report_acceptance_source,
+            "rollout_readiness_baseline.readiness_release_board.cases[].release_gate.status"
+        );
+
+        let _ = fs::remove_dir_all(&case_dir);
+    }
+}
+
 fn extract_topology_live_payload(text: &str) -> Option<serde_json::Value> {
     const START: &str = "<<<HYDRODESK_TOPOLOGY_JSON\n";
     const END: &str = "\n>>>HYDRODESK_TOPOLOGY_JSON";
@@ -1733,6 +2127,122 @@ fn agent_loop_gateway_session_status(
     })
 }
 
+#[derive(Serialize)]
+struct DirEntryInfo {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+    updated_at: String,
+}
+
+#[tauri::command]
+fn case_manager_open_directory(dir_path: String) -> Result<Vec<DirEntryInfo>, String> {
+    let path = resolve_repo_relative(&dir_path);
+    if !path.exists() {
+        return Err(format!("目录不存在: {}", path.display()));
+    }
+    if !path.is_dir() {
+        return Err(format!("路径不是目录: {}", path.display()));
+    }
+    let mut entries = Vec::new();
+    let read_dir = fs::read_dir(&path).map_err(|err| err.to_string())?;
+    for entry in read_dir.flatten() {
+        let meta = entry.metadata().map_err(|err| err.to_string())?;
+        let rel_path = repo_relative_string(&entry.path());
+        entries.push(DirEntryInfo {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: rel_path,
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+            updated_at: system_time_string(&entry.path()),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+fn create_case(case_id: String, display_name: String, project_type: Option<String>) -> Result<bool, String> {
+    let root = repo_root();
+    let script = root.join("Hydrology/scripts/scaffold_new_case.py");
+    if !script.exists() {
+        return Err(format!("脚本不存在: {}", script.display()));
+    }
+    let mut cmd = Command::new("python3");
+    cmd.arg(&script)
+        .arg("--case-id")
+        .arg(&case_id)
+        .arg("--display-name")
+        .arg(&display_name)
+        .arg("--register-loop");
+    
+    if let Some(pt) = project_type {
+        cmd.arg("--project-type").arg(&pt);
+    }
+    
+    let status = cmd.current_dir(&root)
+        .status()
+        .map_err(|err| err.to_string())?;
+    
+    Ok(status.success())
+}
+
+#[tauri::command]
+fn derive_case(source_case_id: String, new_case_id: String, display_name: String) -> Result<bool, String> {
+    let source_dir = discover_case_dir(&source_case_id).ok_or_else(|| format!("源案例不存在: {}", source_case_id))?;
+    let new_dir = repo_root().join("cases").join(&new_case_id);
+    if new_dir.exists() {
+        return Err(format!("目标案例已存在: {}", new_case_id));
+    }
+    
+    let status = Command::new("cp")
+        .arg("-r")
+        .arg(&source_dir)
+        .arg(&new_dir)
+        .status()
+        .map_err(|err| err.to_string())?;
+        
+    if !status.success() {
+        return Err("复制案例目录失败".to_string());
+    }
+    
+    // 更新 manifest
+    let manifest_path = new_dir.join("manifest.yaml");
+    if manifest_path.exists() {
+        if let Ok(content) = fs::read_to_string(&manifest_path) {
+            let updated = content.replace(&source_case_id, &new_case_id);
+            let _ = fs::write(&manifest_path, updated);
+        }
+    }
+    
+    // 更新 config
+    let root = repo_root();
+    let old_cfg = root.join("Hydrology/configs").join(format!("{}.yaml", source_case_id));
+    let new_cfg = root.join("Hydrology/configs").join(format!("{}.yaml", new_case_id));
+    if old_cfg.exists() {
+        if let Ok(content) = fs::read_to_string(&old_cfg) {
+            let updated = content.replace(&source_case_id, &new_case_id);
+            let _ = fs::write(&new_cfg, updated);
+        }
+    }
+    
+    Ok(true)
+}
+
+#[tauri::command]
+fn archive_case(case_id: String) -> Result<bool, String> {
+    let case_dir = discover_case_dir(&case_id).ok_or_else(|| format!("案例不存在: {}", case_id))?;
+    let archive_dir = repo_root().join("cases_archive").join(&case_id);
+    if let Some(parent) = archive_dir.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    fs::rename(&case_dir, &archive_dir).map_err(|err| err.to_string())?;
+    Ok(true)
+}
+
 fn main() {
     let gateway_session: SharedGatewaySession = Arc::new(Mutex::new(None));
     tauri::Builder::default()
@@ -1768,6 +2278,10 @@ fn main() {
             agent_loop_gateway_session_send,
             agent_loop_gateway_session_stop,
             agent_loop_gateway_session_status,
+            case_manager_open_directory,
+            create_case,
+            derive_case,
+            archive_case,
         ])
         .build(tauri::generate_context!())
         .expect("error while building HydroDesk")

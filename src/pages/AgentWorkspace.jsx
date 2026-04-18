@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   openPath,
-  openPathWithAlternates,
   probeHydrodeskAgentBackend,
   revealPath,
-  revealPathWithAlternates,
 } from '../api/tauri_bridge';
 import hydromindClient from '../api/hydromind_client';
 import useTauri from '../hooks/useTauri';
@@ -20,7 +18,6 @@ import {
 } from '../data/notebookArtifacts';
 import {
   getCaseReviewAssets,
-  getCaseRunReviewReleaseContracts,
   getCaseShellEntryPoints,
   resolveShellCaseId,
 } from '../data/case_contract_shell';
@@ -30,6 +27,11 @@ import { getClaudecodeLineageDocRelPath } from '../config/claudecodeReference';
 import AgentStackReferencePanel from '../components/AgentStackReferencePanel';
 import AgentRuntimeStatusPanel from '../components/AgentRuntimeStatusPanel';
 import { useHydrodeskAgentStack } from '../hooks/useHydrodeskAgentStack';
+import { useHydrodeskPluginRegistry } from '../hooks/useHydrodeskPluginRegistry';
+import { useHydrodeskSkillRegistry } from '../hooks/useHydrodeskSkillRegistry';
+import { useAgentRegistryRollup } from '../hooks/useAgentRegistryRollup';
+import { useCaseRunReviewReleaseContracts } from '../hooks/useCaseRunReviewReleaseContracts';
+import { useAgentLoopGatewaySession } from '../hooks/useAgentLoopGatewaySession';
 
 const quickPrompts = [
   '解释当前案例 outcome gate 是否可以签发',
@@ -65,11 +67,30 @@ export default function AgentWorkspace() {
   const { isTauri, readFile, writeFile, showMessage } = useTauri();
   const { stack: agentStack, loadError: agentStackError, configSource: agentStackSource, reload: reloadAgentStack } =
     useHydrodeskAgentStack();
+  const {
+    summary: skillRegistrySummary,
+    loadError: skillRegistryError,
+    loading: skillRegistryLoading,
+    reload: reloadSkillRegistry,
+  } = useHydrodeskSkillRegistry();
+  const {
+    summary: pluginRegistrySummary,
+    loadError: pluginRegistryError,
+    loading: pluginRegistryLoading,
+    reload: reloadPluginRegistry,
+  } = useHydrodeskPluginRegistry();
+  const {
+    agentCount: agentRegistryCount,
+    loadError: agentRegistryError,
+    loading: agentRegistryLoading,
+    reload: reloadAgentRegistry,
+  } = useAgentRegistryRollup();
   const shellCaseId = resolveShellCaseId(activeProject.caseId);
   const reviewAssets = useMemo(() => getCaseReviewAssets(shellCaseId).slice(0, 4), [shellCaseId]);
-  const runReviewContracts = useMemo(() => getCaseRunReviewReleaseContracts(shellCaseId), [shellCaseId]);
+  const runReviewContracts = useCaseRunReviewReleaseContracts(shellCaseId);
   const shellEntryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId).slice(0, 4), [shellCaseId]);
   const notebookPaths = useMemo(() => getNotebookArtifactPaths(shellCaseId), [shellCaseId]);
+  const gwSession = useAgentLoopGatewaySession();
   const [sessionId, setSessionId] = useState(`hydrodesk-${shellCaseId}`);
   const [input, setInput] = useState(`请基于 ${shellCaseId} 当前 outcome gate 和 review 资产，给出下一步建议。`);
   const [messages, setMessages] = useState([
@@ -85,20 +106,26 @@ export default function AgentWorkspace() {
   const [notebookWriteMode, setNotebookWriteMode] = useState('append');
   const [agentBackendProbe, setAgentBackendProbe] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const p = await probeHydrodeskAgentBackend();
-        if (!cancelled) setAgentBackendProbe(p);
-      } catch {
-        if (!cancelled) setAgentBackendProbe(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+  const refreshAgentBackendProbe = useCallback(async () => {
+    try {
+      const p = await probeHydrodeskAgentBackend();
+      setAgentBackendProbe(p);
+    } catch {
+      setAgentBackendProbe(null);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshAgentBackendProbe();
+  }, [refreshAgentBackendProbe]);
+
+  useEffect(() => {
+    void reloadSkillRegistry();
+  }, [reloadSkillRegistry]);
+
+  useEffect(() => {
+    void reloadPluginRegistry();
+  }, [reloadPluginRegistry]);
 
   function buildContextPrompt(question) {
     const contextBlock = [
@@ -267,6 +294,20 @@ export default function AgentWorkspace() {
           agentStackError={agentStackError}
           agentStackSource={agentStackSource}
           onReloadStack={reloadAgentStack}
+          onRefreshBackendProbe={refreshAgentBackendProbe}
+          skillRegistrySummary={skillRegistrySummary}
+          skillRegistryError={skillRegistryError}
+          skillRegistryLoading={skillRegistryLoading}
+          onReloadSkillRegistry={reloadSkillRegistry}
+          pluginRegistrySummary={pluginRegistrySummary}
+          pluginRegistryError={pluginRegistryError}
+          pluginRegistryLoading={pluginRegistryLoading}
+          onReloadPluginRegistry={reloadPluginRegistry}
+          agentRegistryCount={agentRegistryCount}
+          agentRegistryError={agentRegistryError}
+          agentRegistryLoading={agentRegistryLoading}
+          onReloadAgentRegistry={reloadAgentRegistry}
+          gwSession={gwSession}
         />
         <AgentStackReferencePanel
           stack={agentStack}
@@ -346,8 +387,13 @@ export default function AgentWorkspace() {
         <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-700/40 bg-slate-900/50 p-4">
           <div>
             <div className="text-sm font-semibold text-slate-100">Agent 工作面</div>
-            <div className="mt-1 text-xs text-slate-500">
-              当前项目 {activeProject.name} · case {activeProject.caseId} · session {sessionId}
+            <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+              <span>当前项目 {activeProject.name} · case {activeProject.caseId} · session {sessionId}</span>
+              <span className="text-slate-600">|</span>
+              <span className={`flex items-center gap-1.5 ${gwSession.sessionActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${gwSession.sessionActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                {gwSession.sessionActive ? `Gateway Active (PID: ${gwSession.pid})` : 'Gateway Inactive'}
+              </span>
             </div>
             <div className="mt-1 text-[10px] text-slate-600">
               编排谱系与 <code className="text-slate-500">claudecode/</code> 对照见{' '}
@@ -363,6 +409,61 @@ export default function AgentWorkspace() {
           <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">
             HydroDesk Agent · 案例即项目 · NL→MCP 网关
           </div>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-slate-700/40 bg-slate-900/40 p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-slate-200">Gateway Session 控制台</div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!gwSession.isTauriDesktop || gwSession.busy || gwSession.sessionActive}
+                onClick={() => void gwSession.start()}
+                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 disabled:opacity-40"
+              >
+                启动 Gateway
+              </button>
+              <button
+                type="button"
+                disabled={!gwSession.isTauriDesktop || gwSession.busy || !gwSession.sessionActive}
+                onClick={() => void gwSession.stop()}
+                className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 disabled:opacity-40"
+              >
+                停止
+              </button>
+              <button
+                type="button"
+                disabled={!gwSession.sessionActive}
+                onClick={() => gwSession.sendPing()}
+                className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-300 disabled:opacity-40"
+              >
+                Ping
+              </button>
+              <button
+                type="button"
+                onClick={() => gwSession.clearLog()}
+                className="rounded-lg border border-slate-600/50 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700/50"
+              >
+                清空日志
+              </button>
+            </div>
+          </div>
+
+          {gwSession.error && (
+            <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+              Gateway 错误: {gwSession.error}
+            </div>
+          )}
+
+          {gwSession.lines.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-auto rounded-lg border border-slate-700/50 bg-slate-950/80 p-3 font-mono text-[11px] text-slate-300">
+              {gwSession.lines.map((line, idx) => (
+                <div key={idx} className="border-b border-slate-800/50 py-0.5 last:border-0 break-all">
+                  {line}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-700/40 bg-slate-900/40 p-4">
@@ -430,17 +531,25 @@ export default function AgentWorkspace() {
                   引用到输入
                 </button>
                 <button
-                  onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
+                  onClick={() => openPath(contract.path)}
                   className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-2 text-xs text-hydro-300"
                 >
                   打开
                 </button>
                 <button
-                  onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
+                  onClick={() => revealPath(contract.path)}
                   className="rounded-lg border border-slate-700/40 bg-slate-900/50 px-3 py-2 text-xs text-slate-300"
                 >
                   定位
                 </button>
+                {contract.bridgePath ? (
+                  <button
+                    onClick={() => openPath(contract.bridgePath)}
+                    className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+                  >
+                    打开 Bridge
+                  </button>
+                ) : null}
               </div>
             </div>
           ))}

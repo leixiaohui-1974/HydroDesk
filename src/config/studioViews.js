@@ -1,9 +1,14 @@
 export const studioViews = [
   {
+    key: 'workbench',
     path: '/workbench',
+    aliases: ['/', '/dashboard'],
     label: '工作台',
     group: 'core',
     lane: 'workflow',
+    navOrder: 10,
+    iconKey: 'workbench',
+    componentKey: 'workbench',
     modes: ['development', 'delivery'],
     title: '主工作台',
     subtitle: '当前案例主链摘要；再进入 Launch / Monitor / Review / Release 四个固定工位',
@@ -11,21 +16,29 @@ export const studioViews = [
     actions: ['进入 Launch', '查看 Monitor', '打开 Review / Release'],
   },
   {
+    key: 'projects',
     path: '/projects',
     label: '项目与案例',
     group: 'core',
     lane: 'support',
+    navOrder: 30,
+    iconKey: 'projects',
+    componentKey: 'projects',
     modes: ['development', 'delivery'],
-    title: '工程与案例 · 平台中控',
-    subtitle: '任意 case_id：新建/编辑 manifest 与契约、主闭环 dry-run、质量与就绪度评审；与 rollout 六案例共用同一套编排',
+    title: 'Case Workspace · 平台中控',
+    subtitle: '任意 case_id：新建/编辑 manifest 与契约、主闭环 dry-run、质量与就绪度评审；与当前 rollout cohort 共用同一套编排',
     focus: ['案例列表', '新建骨架', '内联编辑', '闭环门控'],
     actions: ['新建案例', '切换 case', '合并就绪度', '刷新扫描'],
   },
   {
+    key: 'analysis',
     path: '/analysis',
     label: '数据与资产',
     group: 'core',
     lane: 'support',
+    navOrder: 40,
+    iconKey: 'analysis',
+    componentKey: 'analysis',
     modes: ['development', 'delivery'],
     title: '资料发现与资产视图',
     subtitle: '围绕数据来源、可信度、缺口与冲突展示资产状态',
@@ -33,10 +46,14 @@ export const studioViews = [
     actions: ['扫描资料', '筛选冲突', '进入资产详情'],
   },
   {
+    key: 'modeling',
     path: '/modeling',
     label: '拓扑与 GIS',
     group: 'core',
     lane: 'support',
+    navOrder: 50,
+    iconKey: 'modeling',
+    componentKey: 'modeling',
     modes: ['development', 'delivery'],
     title: '图形拓扑与 GIS 建模',
     subtitle: '统一承接拓扑画布、空间图层、控制断面候选与结果对比',
@@ -44,10 +61,14 @@ export const studioViews = [
     actions: ['添加节点', '连接边', '启动 GIS 任务'],
   },
   {
+    key: 'simulation',
     path: '/simulation',
     label: 'Launch',
     group: 'core',
     lane: 'workflow',
+    navOrder: 20,
+    iconKey: 'simulation',
+    componentKey: 'simulation',
     modes: ['development', 'delivery'],
     title: 'Launch · 主链启动台',
     subtitle: '按当前案例 pinned workflows、WorkflowRun 与执行策略统一入口',
@@ -55,10 +76,29 @@ export const studioViews = [
     actions: ['直接启动主链', '切换策略', '绑定日志'],
   },
   {
+    key: 'verification',
+    path: '/verification',
+    label: 'Verification & Control',
+    group: 'core',
+    lane: 'workflow',
+    navOrder: 25,
+    iconKey: 'verification',
+    componentKey: 'verification',
+    modes: ['development', 'delivery'],
+    title: '控制与校核 · 验模与实时验证',
+    subtitle: '独立验模与实时控制面，提供阶段验收闭环追踪',
+    focus: ['验模结果', '控制校核', '验收门禁'],
+    actions: ['查看失败', '定位关键产物', '复核 Gate 状态'],
+  },
+  {
+    key: 'review',
     path: '/review',
     label: 'Review / Release',
     group: 'core',
     lane: 'workflow',
+    navOrder: 70,
+    iconKey: 'review',
+    componentKey: 'review',
     modes: ['development', 'delivery'],
     title: 'Review / Release · 审查交付台',
     subtitle: '固定 ReviewBundle、coverage、ReleaseManifest 与签发动作',
@@ -66,10 +106,14 @@ export const studioViews = [
     actions: ['查看审查', '核对 gate', '准备交付'],
   },
   {
+    key: 'monitor',
     path: '/monitor',
     label: 'Monitor',
     group: 'core',
     lane: 'workflow',
+    navOrder: 60,
+    iconKey: 'monitor',
+    componentKey: 'monitor',
     modes: ['development', 'delivery'],
     title: 'Monitor · 值守巡检台',
     subtitle: '围绕 live dashboard、日志尾部、checkpoint 与告警进行统一值守',
@@ -77,10 +121,14 @@ export const studioViews = [
     actions: ['打开日志', '查看告警', '恢复任务'],
   },
   {
+    key: 'extensions',
     path: '/extensions',
     label: '扩展中心',
     group: 'advanced',
     lane: 'developer',
+    navOrder: 80,
+    iconKey: 'extensions',
+    componentKey: 'extensions',
     modes: ['development'],
     title: '统一扩展中心',
     subtitle: '管理 agent、skill、MCP、模型算法和 workflow 五类扩展',
@@ -88,10 +136,14 @@ export const studioViews = [
     actions: ['启停扩展', '校验 schema', '打包发布'],
   },
   {
+    key: 'ide',
     path: '/ide',
     label: 'Terminal 模式',
     group: 'advanced',
     lane: 'developer',
+    navOrder: 90,
+    iconKey: 'ide',
+    componentKey: 'ide',
     modes: ['development'],
     title: 'Terminal / Workspace 工作面',
     subtitle: '面向 ClaudeCode 内核的终端、文件树、Diff、搜索替换与开发宿主入口',
@@ -100,10 +152,14 @@ export const studioViews = [
     surfaceMode: 'terminal',
   },
   {
+    key: 'agent',
     path: '/agent',
     label: 'Agent 模式',
     group: 'advanced',
     lane: 'developer',
+    navOrder: 100,
+    iconKey: 'agent',
+    componentKey: 'agent',
     modes: ['development'],
     title: 'Agent 工作面',
     subtitle: '作为灵活 AI 调用入口，聚焦多轮对话、提示编排、证据解释与下一步建议',
@@ -112,10 +168,30 @@ export const studioViews = [
     surfaceMode: 'agent',
   },
   {
+    key: 'knowledge',
+    path: '/knowledge',
+    label: 'Knowledge 模式',
+    group: 'advanced',
+    lane: 'developer',
+    navOrder: 105,
+    iconKey: 'knowledge',
+    componentKey: 'knowledge',
+    modes: ['development'],
+    title: 'Knowledge 工作面',
+    subtitle: '围绕原始资料收口、Graphify sidecar 与共享 wiki 投影查看知识状态',
+    focus: ['source summary', 'graphify sidecar', 'wiki projection'],
+    actions: ['运行 source sync', '查看 source contracts', '打开 graph report'],
+    surfaceMode: 'notebook',
+  },
+  {
+    key: 'notebook',
     path: '/notebook',
     label: 'Notebook 模式',
     group: 'advanced',
     lane: 'developer',
+    navOrder: 110,
+    iconKey: 'notebook',
+    componentKey: 'notebook',
     modes: ['development'],
     title: 'Evidence Notebook 工作面',
     subtitle: '围绕 contracts、coverage、review bundle 与签发备注组织证据笔记',
@@ -124,9 +200,27 @@ export const studioViews = [
     surfaceMode: 'notebook',
   },
   {
+    key: 'docs',
+    path: '/docs',
+    label: '文档中心',
+    group: 'system',
+    navOrder: 115,
+    iconKey: 'docs',
+    componentKey: 'docs',
+    modes: ['development', 'delivery'],
+    title: 'HydroDesk 文档中心',
+    subtitle: '集中查看系统逻辑、账号手册、页面入口、后台谱系与当前进度差距',
+    focus: ['系统逻辑', '按账号手册', '开发地图'],
+    actions: ['打开文档', '查找页面说明', '查看当前差距'],
+  },
+  {
+    key: 'settings',
     path: '/settings',
     label: '设置',
     group: 'system',
+    navOrder: 120,
+    iconKey: 'settings',
+    componentKey: 'settings',
     modes: ['development', 'delivery'],
     title: '系统与个性化设置',
     subtitle: '配置桌面偏好、本地能力、主题和运行模式',
@@ -136,10 +230,27 @@ export const studioViews = [
 ];
 
 export const getStudioView = (path) =>
-  studioViews.find((view) => path === view.path || path.startsWith(`${view.path}/`)) || studioViews[0];
+  studioViews.find((view) =>
+    path === view.path
+    || path.startsWith(`${view.path}/`)
+    || (Array.isArray(view.aliases) && view.aliases.some((alias) => path === alias || path.startsWith(`${alias}/`)))
+  ) || studioViews[0];
 
-export const getVisibleStudioViews = (mode) =>
-  studioViews.filter((view) => !view.modes || view.modes.includes(mode));
+export const getVisibleStudioViews = (mode, account) =>
+  studioViews.filter((view) => {
+    if (view.modes && !view.modes.includes(mode)) return false;
+    if (account?.visibleViewKeys?.length) {
+      return account.visibleViewKeys.includes(view.key);
+    }
+    return true;
+  });
+
+export const getOrderedVisibleStudioViews = (mode, account) =>
+  getVisibleStudioViews(mode, account).slice().sort((left, right) => (left.navOrder || 999) - (right.navOrder || 999));
+
+export const studioViewRedirects = studioViews.flatMap((view) =>
+  (view.aliases || []).map((from) => ({ from, to: view.path })),
+);
 
 export const developerSurfaces = [
   {

@@ -2,16 +2,19 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { checkOllama, checkHydroMind } from '../api/tauri_bridge';
 import { developerSurfaces, getStudioView } from '../config/studioViews';
+import { getModeMeta, getRuntimeEnvironmentMeta } from '../config/shellMeta';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
 
 /**
  * Bottom status bar showing connection status, engine info, memory usage
  */
-export default function StatusBar() {
+export default function StatusBar({ isTauri = false }) {
   const location = useLocation();
   const activeView = getStudioView(location.pathname);
   const { activeMode, activeSurfaceMode } = useStudioWorkspace();
   const activeSurface = developerSurfaces.find((surface) => surface.key === activeSurfaceMode) || developerSurfaces[0];
+  const modeMeta = getModeMeta(activeMode);
+  const envMeta = getRuntimeEnvironmentMeta(isTauri);
   const [status, setStatus] = useState({
     hydromindConnected: false,
     ollamaAvailable: false,
@@ -87,8 +90,8 @@ export default function StatusBar() {
           <span>当前视图: {activeView.label}</span>
         </div>
         <div className="hidden items-center gap-1.5 md:flex">
-          <span className={`w-1.5 h-1.5 rounded-full ${activeMode === 'development' ? 'bg-hydro-400' : 'bg-emerald-400'}`} />
-          <span>{activeMode === 'development' ? '开发模式' : '发布模式'}</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${modeMeta.dotClassName}`} />
+          <span>{modeMeta.label}</span>
         </div>
         {activeMode === 'development' && (
           <div className="hidden items-center gap-1.5 md:flex">
@@ -100,6 +103,7 @@ export default function StatusBar() {
 
       <div className="flex items-center gap-4">
         <span className="hidden md:inline">主壳: HydroMind Studio</span>
+        <span className="hidden md:inline">{envMeta.label}</span>
         <button
           onClick={checkConnections}
           className="hover:text-slate-300 transition-colors"

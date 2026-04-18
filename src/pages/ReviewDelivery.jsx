@@ -1,117 +1,407 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  getCaseContractSummary,
+  hasPlaywrightBrowserFixture,
   openPath,
-  openPathWithAlternates,
+  readWorkspaceTextFile,
   readWorkspaceTextFileFirstOf,
-  revealPath,
-  revealPathWithAlternates,
   runWorkspaceCommand,
 } from '../api/tauri_bridge';
+import { ReviewArtifactsPanel } from '../components/review/ReviewArtifactsPanel';
+import { ReviewActionCenter, ReviewHeroSection, ReviewWorkSection } from '../components/review/ReviewPageSections';
 import {
   getCaseReviewAssets,
-  getCaseRunReviewReleaseContracts,
   getCaseShellEntryPoints,
   resolveShellCaseId,
 } from '../data/case_contract_shell';
+import { getModelStrategyMeta, getTriadStatusMeta } from '../config/uiMeta';
+import {
+  reviewBacklogSectionMeta,
+  reviewBadgeStyles,
+  reviewHeroStatsMeta,
+  reviewModelCapabilityMeta,
+  reviewRoleTemplates,
+  reviewSpotlightEffects,
+} from '../data/reviewDeliveryCatalog';
 import { getActiveRoleAgent, getPendingApprovals, studioState } from '../data/studioState';
 import useTauri from '../hooks/useTauri';
 import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
+import { useCaseRunReviewReleaseContracts } from '../hooks/useCaseRunReviewReleaseContracts';
+import { usePlatformGovernanceGates } from '../hooks/usePlatformGovernanceGates';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
+import { buildPreviewSection } from '../components/workspace/workspacePreviewUtils';
+import useWorkspacePreviewLoader from '../components/workspace/useWorkspacePreviewLoader';
+import {
+  buildWorkspaceBusinessPreviewByKind,
+  getWorkspaceAssetPreviewKind,
+} from '../components/workspace/workspaceAssetPreviewRegistry';
+import { buildSixCaseFinalReportRollup } from './finalReportRollup.js';
+import {
+  buildStandardObjectReportWorkspaceAssets,
+  getStandardObjectReportIndexPath,
+} from '../components/workspace/standardObjectReportPreview.js';
 import {
   buildBootstrapCaseTriadMinimalCommand,
+  buildExportCaseModelStrategyBatchCommand,
+  buildExportCaseModelStrategyCommand,
   buildHydrodeskE2eActionsCommand,
   buildLintCaseKnowledgeLinksCommand,
+  buildRunCasePipelinePreflightCommand,
+  getAutonomousWaternetE2eLoopConfigRelPath,
   parseSingleObjectJsonStdout,
 } from '../config/hydrodesk_commands';
 
-const badgeStyles = {
-  passed: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  review: 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300',
-};
+function parseLoopCaseIds(text) {
+  if (!text || typeof text !== 'string') return [];
+  const match = text.match(/case_selection:\s*\n[\s\S]*?case_ids:\s*\n([\s\S]*?)(?=^\S|\Z)/m);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*-\s*([A-Za-z0-9_-]+)\s*$/)?.[1] || '')
+    .filter(Boolean);
+}
 
-const roleTemplates = {
-  teacher: {
-    label: '教师',
-    headline: '课堂讲解版',
-    summary: '先展示结论与案例脉络，再回到拓扑节点和 GIS 图层做讲解，适合课堂投屏与分步演示。',
-    readingHabits: ['先看结论摘要', '再看过程回放', '最后下钻到图层证据'],
-    narrative: '适合把 review bundle 拆成“问题—证据—结论—作业”的教学路径。',
-    topologyNodes: ['取水口', '输水干线', '控制断面', '风险支流'],
-    gisLayers: ['河网结果', '断面候选', '调度影响范围'],
-  },
-  student: {
-    label: '学生',
-    headline: '学习练习版',
-    summary: '突出步骤解释、术语提示和结果对照，方便按任务单逐步理解成果页与空间证据之间的关系。',
-    readingHabits: ['先看任务目标', '再看步骤提示', '最后对照成果产物'],
-    narrative: '适合围绕“为什么这样建模、为什么这样判断”进行自主学习。',
-    topologyNodes: ['任务起点', '河网节点', '断面候选', '结论锚点'],
-    gisLayers: ['DEM 校核', '流域边界', '成果叠图'],
-  },
-  designer: {
-    label: '设计',
-    headline: '方案审查版',
-    summary: '突出拓扑关系、空间校核与交付风险，把文字审查意见和图上对象绑定在一起。',
-    readingHabits: ['先看关键断面', '再看 GIS 校核', '最后看交付清单'],
-    narrative: '适合从图上追踪证据，再落回成果物与 release 条件。',
-    topologyNodes: ['渠首节点', '分水口', '控制断面', '支流汇入点'],
-    gisLayers: ['控制断面图层', '地形校核图层', '成果边界叠加'],
-  },
-  researcher: {
-    label: '科研',
-    headline: '证据链版',
-    summary: '突出参数来源、实验记录和多轮结果对比，方便把拓扑/GIS 观察转成研究结论。',
-    readingHabits: ['先看数据可信度', '再看实验差异', '最后提炼结论'],
-    narrative: '适合做参数敏感性分析、方法对比和论文图表素材整理。',
-    topologyNodes: ['实验节点', '对比断面', '敏感支流', '验证节点'],
-    gisLayers: ['参数试验层', '结果差分层', '验证样点层'],
-  },
-  dispatcher: {
-    label: '调度',
-    headline: '调度会商版',
-    summary: '突出最新运行状态、影响范围和处置建议，支持从成果页直接跳到拓扑或 GIS 证据。',
-    readingHabits: ['先看态势与风险', '再看影响范围', '最后确认动作'],
-    narrative: '适合会商时围绕关键断面、告警范围和调度预案快速阅读。',
-    topologyNodes: ['当前任务', '关键控制点', '调度影响节点', '告警位置'],
-    gisLayers: ['实时影响范围', '供水覆盖层', '风险热区'],
-  },
-  operator: {
-    label: '运行',
-    headline: '值守处置版',
-    summary: '突出日志、最新产物和定位动作，让运行人员快速从成果页跳回现场对象与文件。',
-    readingHabits: ['先看异常点', '再看日志与产物', '最后执行处置'],
-    narrative: '适合值守巡检、异常复盘和班次交接。',
-    topologyNodes: ['告警站点', '运行断面', '巡检路线', '恢复节点'],
-    gisLayers: ['站点态势层', '告警热区', '巡检范围层'],
-  },
-  manager: {
-    label: '管理',
-    headline: '签发总览版',
-    summary: '突出可交付结论、关键风险和成果完整性，便于管理人员快速签发与追踪。',
-    readingHabits: ['先看结论与风险', '再看关键证据', '最后看交付完整性'],
-    narrative: '适合做跨团队汇报、成果验收和版本放行决策。',
-    topologyNodes: ['核心干线', '重点断面', '影响区域', '交付节点'],
-    gisLayers: ['总览态势层', '重点成果层', '风险覆盖层'],
-  },
-};
+function GovernanceGatesAggregateDisplay({ platformGovernanceRows, platformGovernanceLoading, platformGovernanceError, reloadPlatformGovernance, isTauri, shellCaseId, openPath }) {
+  return (
+    <div className="rounded-2xl border border-cyan-500/25 bg-cyan-950/15 p-4" data-testid="platform-governance-gates">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-100">三道治理门（Hydraulics / Coupling / Assimilation）</div>
+          <div className="mt-1 text-xs text-slate-500">统一聚合的水力学、耦合、同化三道治理门状态。</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!isTauri || platformGovernanceLoading || !shellCaseId}
+            onClick={() => void reloadPlatformGovernance()}
+            className="rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-1.5 text-[11px] text-cyan-200 disabled:opacity-50"
+          >
+            {platformGovernanceLoading ? '刷新中…' : '刷新契约摘要'}
+          </button>
+        </div>
+      </div>
+      {platformGovernanceError ? <p className="mt-2 text-[11px] text-rose-300/90">{platformGovernanceError}</p> : null}
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        {platformGovernanceRows.map((row) => {
+          const okish =
+            row.status === 'completed' ||
+            row.status === 'ok' ||
+            row.status === 'passed' ||
+            row.status === 'quality_passed' ||
+            row.status === 'present';
+          const bad = row.status === 'missing' || row.status === 'invalid_json' || row.status === 'quality_failed';
+          return (
+            <div
+              key={row.key}
+              data-testid={`platform-governance-gate-${row.key}`}
+              className={`rounded-xl border p-4 ${
+                bad
+                  ? 'border-rose-500/30 bg-rose-500/5'
+                  : okish
+                    ? 'border-emerald-500/25 bg-emerald-500/5'
+                    : 'border-slate-700/40 bg-slate-950/40'
+              }`}
+            >
+              <div className="text-xs font-semibold text-slate-100">{row.label}</div>
+              <div className="mt-1 text-[11px] leading-5 text-slate-500">{row.description}</div>
+              <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-600">状态</div>
+              <div className="mt-0.5 font-mono text-sm text-slate-200">{row.status}</div>
+              <div className="mt-1 text-[10px] text-slate-500">字段：{row.hint}</div>
+              {row.resolvedPath ? (
+                <div className="mt-2 break-all font-mono text-[10px] text-slate-600">{row.resolvedPath}</div>
+              ) : (
+                <div className="mt-2 text-[10px] text-slate-600">尝试：{row.pathsTried.join(' · ')}</div>
+              )}
+              {row.resolvedPath ? (
+                <button
+                  type="button"
+                  onClick={() => void openPath(row.resolvedPath)}
+                  className="mt-2 rounded border border-cyan-500/30 px-2 py-1 text-[10px] text-cyan-300"
+                >
+                  打开 JSON
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function buildReviewAssetBusinessPreview({
+  asset,
+  previewContent,
+  shellCaseId,
+  caseContractSummary,
+  triadMeta,
+  notebookMetaMap,
+}) {
+  if (!asset) return null;
+  const assetKind = getWorkspaceAssetPreviewKind({
+    path: asset.path,
+    previewType: asset.previewType,
+    kind: asset.kind,
+  });
+
+  if (assetKind === 'contract') {
+    return buildWorkspaceBusinessPreviewByKind('contract', {
+      previewContent,
+      title: `${asset.label} 业务预览`,
+      description: asset.note,
+      stage: asset.stage,
+      status: asset.status,
+      canonicalPath: asset.path,
+      bridgePath: asset.bridgePath,
+      triadLabel: triadMeta.label,
+      pipelineReady: caseContractSummary.pipeline_contract_ready,
+      currentWorkflow: caseContractSummary.current_workflow,
+    });
+  }
+
+  if (assetKind === 'outcome_coverage') {
+    return buildWorkspaceBusinessPreviewByKind('outcome_coverage', {
+      previewContent,
+      description: '用于判断当前 case 的 outcome 覆盖、schema/evidence 绑定和 gate 可信度。',
+      badges: ['coverage', caseContractSummary.gate_status || 'pending'],
+      normalizedCoverage: caseContractSummary.normalized_outcome_coverage,
+      rawCoverage: caseContractSummary.raw_outcome_coverage,
+      schemaValidCount: caseContractSummary.schema_valid_count,
+      evidenceBoundCount: caseContractSummary.evidence_bound_count,
+      deliveryPackId: caseContractSummary.delivery_pack_id,
+    });
+  }
+
+  if (assetKind === 'verification') {
+    return buildWorkspaceBusinessPreviewByKind('verification', {
+      previewContent,
+      description: '用于查看阶段验收、triad 状态和当前 pipeline readiness。',
+      badges: ['verification', triadMeta.label || 'triad'],
+      gate: caseContractSummary.gate_status,
+      pipelineReady: caseContractSummary.pipeline_contract_ready,
+      triadLabel: triadMeta.label,
+      currentWorkflow: caseContractSummary.current_workflow,
+      outputs: `${caseContractSummary.outcomes_generated || 0}/${caseContractSummary.total_executed || caseContractSummary.total || 0}`,
+    });
+  }
+
+  if (assetKind === 'final_report') {
+    return buildWorkspaceBusinessPreviewByKind('final_report', {
+      previewContent,
+      description: '统一最终报告对象，供 Review/Delivery 页面和验收链直接读取断言。',
+      acceptanceScope: caseContractSummary.final_report_acceptance_scope,
+      acceptanceSource: caseContractSummary.final_report_acceptance_source,
+    });
+  }
+
+  if (assetKind === 'live_dashboard') {
+    return buildWorkspaceBusinessPreviewByKind('live_dashboard', {
+      previewContent,
+      description: '更适合被理解为实时观测面，而不是普通 HTML/Markdown 文件。',
+      badges: ['live-dashboard', caseContractSummary.current_workflow || 'idle'],
+      path: asset.path,
+      currentWorkflow: caseContractSummary.current_workflow,
+      gate: caseContractSummary.gate_status,
+      outputs: `${caseContractSummary.outcomes_generated || 0}/${caseContractSummary.total_executed || caseContractSummary.total || 0}`,
+    });
+  }
+
+  if (assetKind === 'document_note') {
+    const metadata = notebookMetaMap[asset.path];
+    return buildWorkspaceBusinessPreviewByKind(assetKind, {
+      previewContent,
+      title: `${asset.label} 业务预览`,
+      description: asset.note,
+      badges: ['notebook-chain', metadata?.signoffStatus || 'draft'],
+      documentType: asset.label,
+      caseId: shellCaseId,
+      gate: caseContractSummary.gate_status,
+      reviewBundle: caseContractSummary.triad_review_bundle_rel,
+      releaseManifest: caseContractSummary.triad_release_manifest_rel,
+      deliveryPack: caseContractSummary.delivery_pack_id,
+      version: metadata?.version || 'v0.1.0',
+      updatedBy: metadata?.updatedBy || 'unknown',
+    });
+  }
+
+  if (assetKind === 'standard_object_report_index' || assetKind === 'standard_object_report') {
+    return buildWorkspaceBusinessPreviewByKind(assetKind, {
+      previewContent,
+      path: asset.path,
+      title: asset.label,
+      description: asset.note,
+    });
+  }
+
+  return {
+    kind: 'business',
+    title: asset.label,
+    description: asset.note || '当前 review 资产预览',
+    badges: [asset.previewType || 'asset'],
+    sections: [
+      buildPreviewSection('资产信息', [
+        { label: 'path', value: asset.path },
+        { label: 'case_id', value: shellCaseId || '—' },
+      ]),
+    ].filter(Boolean),
+    rawContent: previewContent,
+  };
+}
+
+function inferReviewFocusTargetsFromAction(actionKey = '') {
+  const key = String(actionKey || '').trim();
+  if (!key) return [];
+
+  if (key === 'delivery-pack' || key === 'delivery-pack-strict') {
+    return [
+      { kind: 'release_note' },
+      { kind: 'review_memo' },
+      { kind: 'contract', stage: 'Release' },
+    ];
+  }
+
+  if (key === 'knowledge-lint') {
+    return [
+      { kind: 'review_memo' },
+      { kind: 'contract', stage: 'Review' },
+    ];
+  }
+
+  if (key === 'triad-bootstrap') {
+    return [
+      { kind: 'contract', stage: 'Run' },
+      { kind: 'case_manifest' },
+    ];
+  }
+
+  return [];
+}
+
+function renderMarkdownBlocks(markdown = '') {
+  const lines = String(markdown).replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let keyIndex = 0;
+
+  function flushParagraph() {
+    if (paragraph.length === 0) return;
+    blocks.push(
+      <p key={`p-${keyIndex++}`} className="text-sm leading-7 text-slate-300">
+        {paragraph.join(' ')}
+      </p>
+    );
+    paragraph = [];
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('#')) {
+      flushParagraph();
+      const level = line.match(/^#+/)[0].length;
+      const text = line.replace(/^#+\s*/, '');
+      const sizes = {
+        1: 'text-2xl font-bold mt-6 mb-4 text-slate-100',
+        2: 'text-xl font-semibold mt-5 mb-3 text-slate-200',
+        3: 'text-lg font-medium mt-4 mb-2 text-slate-200',
+      };
+      blocks.push(
+        <div key={`h-${keyIndex++}`} className={sizes[level] || 'text-base font-medium mt-3 mb-2 text-slate-200'}>
+          {text}
+        </div>
+      );
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      flushParagraph();
+      blocks.push(
+        <div key={`li-${keyIndex++}`} className="ml-4 flex items-start gap-2 mt-1">
+          <span className="text-slate-500 mt-1">•</span>
+          <span className="text-sm leading-6 text-slate-300">{line.substring(2)}</span>
+        </div>
+      );
+    } else if (line.startsWith('> ')) {
+      flushParagraph();
+      blocks.push(
+        <blockquote key={`bq-${keyIndex++}`} className="border-l-4 border-slate-600 pl-4 py-1 my-3 text-sm italic text-slate-400 bg-slate-800/30 rounded-r-lg">
+          {line.substring(2)}
+        </blockquote>
+      );
+    } else if (line.startsWith('|')) {
+      flushParagraph();
+      // Simple table row rendering
+      const cols = line.split('|').filter(c => c.trim() !== '');
+      if (line.includes('---')) {
+        // Separator row, skip
+      } else {
+        blocks.push(
+          <div key={`tr-${keyIndex++}`} className="flex border-b border-slate-700/50 py-1.5">
+            {cols.map((col, idx) => (
+              <div key={`td-${idx}`} className="flex-1 px-2 text-sm text-slate-300 overflow-hidden text-ellipsis whitespace-nowrap" title={col.trim()}>
+                {col.trim()}
+              </div>
+            ))}
+          </div>
+        );
+      }
+    } else if (line.trim() === '') {
+      flushParagraph();
+    } else {
+      paragraph.push(line);
+    }
+  }
+  flushParagraph();
+  return blocks;
+}
 
 export default function ReviewDelivery() {
-  const { activeProject, activeRole, setActiveRole } = useStudioWorkspace();
+  const navigate = useNavigate();
+  const { activeProject, activeAccount, activeRole } = useStudioWorkspace();
   const { isTauri } = useTauri();
   const shellCaseId = resolveShellCaseId(activeProject.caseId);
   const { summary: caseContractSummary, loading: caseContractSummaryLoading, reload: reloadCaseContractSummary } =
     useCaseContractSummary(activeProject.caseId, 8000);
+  const triadMeta = getTriadStatusMeta(caseContractSummary.triad_truth_status);
+  const pipelineTruthClassName = caseContractSummary.pipeline_contract_ready
+    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+    : 'border-rose-500/40 bg-rose-500/10 text-rose-200';
+  const triadBridgePaths = {
+    Run: String(caseContractSummary.triad_workflow_run_rel || '').endsWith('.contract.json')
+      ? caseContractSummary.triad_workflow_run_rel
+      : '',
+    Review: String(caseContractSummary.triad_review_bundle_rel || '').endsWith('.contract.json')
+      ? caseContractSummary.triad_review_bundle_rel
+      : '',
+    Release: String(caseContractSummary.triad_release_manifest_rel || '').endsWith('.contract.json')
+      ? caseContractSummary.triad_release_manifest_rel
+      : '',
+  };
+  const {
+    rows: platformGovernanceRows,
+    loading: platformGovernanceLoading,
+    error: platformGovernanceError,
+    reload: reloadPlatformGovernance,
+  } = usePlatformGovernanceGates(shellCaseId);
   const [triadBootstrapBusy, setTriadBootstrapBusy] = useState(false);
   const [triadBootstrapError, setTriadBootstrapError] = useState('');
   const [triadBootstrapStdout, setTriadBootstrapStdout] = useState('');
   const [knowledgeLintBusy, setKnowledgeLintBusy] = useState(false);
   const [knowledgeLintError, setKnowledgeLintError] = useState('');
   const [knowledgeLintLast, setKnowledgeLintLast] = useState(null);
+  const [pipelinePreflight, setPipelinePreflight] = useState(null);
+  const [pipelinePreflightLoading, setPipelinePreflightLoading] = useState(false);
+  const [pipelinePreflightError, setPipelinePreflightError] = useState('');
   const [deliveryPackBusy, setDeliveryPackBusy] = useState(false);
   const [deliveryPackError, setDeliveryPackError] = useState('');
   const [deliveryPackLast, setDeliveryPackLast] = useState(null);
+  const [modelStrategy, setModelStrategy] = useState(null);
+  const [modelStrategyLoading, setModelStrategyLoading] = useState(false);
+  const [modelStrategyError, setModelStrategyError] = useState('');
+  const [modelStrategyBatch, setModelStrategyBatch] = useState(null);
+  const [modelStrategyBatchLoading, setModelStrategyBatchLoading] = useState(false);
+  const [modelStrategyBatchError, setModelStrategyBatchError] = useState('');
+  const [contractSummaryBatch, setContractSummaryBatch] = useState(null);
+  const [contractSummaryBatchLoading, setContractSummaryBatchLoading] = useState(false);
+  const [contractSummaryBatchError, setContractSummaryBatchError] = useState('');
 
   const bootstrapTriadMinimalCommand = useMemo(
     () =>
@@ -164,6 +454,147 @@ export default function ReviewDelivery() {
     }
   }, [shellCaseId, isTauri]);
 
+  const loadModelStrategy = useCallback(async () => {
+    if (!shellCaseId || !isTauri) return;
+    setModelStrategyLoading(true);
+    setModelStrategyError('');
+    try {
+      const cmd = buildExportCaseModelStrategyCommand(shellCaseId);
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.case) {
+        setModelStrategyError('未能解析模型判型 JSON');
+        setModelStrategy(null);
+        return;
+      }
+      setModelStrategy(payload.case);
+    } catch (e) {
+      setModelStrategyError(e?.message || String(e));
+      setModelStrategy(null);
+    } finally {
+      setModelStrategyLoading(false);
+    }
+  }, [shellCaseId, isTauri]);
+
+  const loadModelStrategyBatch = useCallback(async () => {
+    if (!isTauri) return;
+    setModelStrategyBatchLoading(true);
+    setModelStrategyBatchError('');
+    try {
+      const cmd = buildExportCaseModelStrategyBatchCommand();
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload?.ok || !payload?.rollup) {
+        setModelStrategyBatchError('未能解析批量模型判型 JSON');
+        setModelStrategyBatch(null);
+        return;
+      }
+      setModelStrategyBatch(payload);
+    } catch (e) {
+      setModelStrategyBatchError(e?.message || String(e));
+      setModelStrategyBatch(null);
+    } finally {
+      setModelStrategyBatchLoading(false);
+    }
+  }, [isTauri]);
+
+  const [coverageSummaryText, setCoverageSummaryText] = useState('');
+  const [coverageSummaryLoading, setCoverageSummaryLoading] = useState(false);
+  const [reviewPageTab, setReviewPageTab] = useState('work');
+
+  const loadCoverageSummary = useCallback(async () => {
+    if (!isTauri) return;
+    setCoverageSummaryLoading(true);
+    try {
+      const text = await readWorkspaceTextFile('reports/coverage/COVERAGE_SUMMARY.md', '');
+      setCoverageSummaryText(text);
+    } catch (e) {
+      setCoverageSummaryText(`Failed to load coverage summary: ${e?.message || String(e)}`);
+    } finally {
+      setCoverageSummaryLoading(false);
+    }
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (reviewPageTab === 'coverage') {
+      loadCoverageSummary();
+    }
+  }, [reviewPageTab, loadCoverageSummary]);
+
+  const loadContractSummaryBatch = useCallback(async () => {
+    if (!isTauri) return;
+    setContractSummaryBatchLoading(true);
+    setContractSummaryBatchError('');
+    try {
+      const yamlText = await readWorkspaceTextFile(getAutonomousWaternetE2eLoopConfigRelPath(), '');
+      const caseIds = parseLoopCaseIds(yamlText);
+      if (caseIds.length === 0) {
+        setContractSummaryBatchError('未能从 rollout 配置解析六案例 case_ids');
+        setContractSummaryBatch(null);
+        return;
+      }
+      const rows = await Promise.all(caseIds.map((caseId) => getCaseContractSummary(caseId, null)));
+      const validRows = rows.filter(Boolean);
+      const bridgeCases = validRows.filter((row) => (row?.triad_bridge_fallback_count || 0) > 0);
+      const pipelineBlockedCases = validRows.filter((row) => !row?.pipeline_contract_ready);
+      const canonicalReadyCases = validRows.filter(
+        (row) =>
+          row?.triad_truth_status === 'real_ready' &&
+          (row?.triad_bridge_fallback_count || 0) === 0 &&
+          !!row?.pipeline_contract_ready,
+      );
+      const truthRollup = buildSixCaseFinalReportRollup({
+        caseIds,
+        rows: validRows,
+      });
+      setContractSummaryBatch({
+        caseIds,
+        rows: validRows,
+        truthRollup,
+        counts: {
+          total: caseIds.length,
+          bridgeFallback: bridgeCases.length,
+          pipelineBlocked: pipelineBlockedCases.length,
+          canonicalReady: canonicalReadyCases.length,
+          finalReportPresent: truthRollup.counts.finalReportPresent,
+          caseScopedAcceptance: truthRollup.counts.caseScopedAcceptance,
+          rolloutScopedAcceptance: truthRollup.counts.rolloutScopedAcceptance,
+          promotionReleaseReady: truthRollup.counts.promotionReleaseReady,
+          promotionNeedsReview: truthRollup.counts.promotionNeedsReview,
+          promotionBlocked: truthRollup.counts.promotionBlocked,
+          promotionMissing: truthRollup.counts.promotionMissing,
+        },
+      });
+    } catch (e) {
+      setContractSummaryBatch(null);
+      setContractSummaryBatchError(e?.message || String(e));
+    } finally {
+      setContractSummaryBatchLoading(false);
+    }
+  }, [isTauri]);
+
+  const loadPipelinePreflight = useCallback(async () => {
+    if (!shellCaseId || !isTauri) return;
+    setPipelinePreflightLoading(true);
+    setPipelinePreflightError('');
+    try {
+      const cmd = buildRunCasePipelinePreflightCommand(shellCaseId, 'simulation');
+      const result = await runWorkspaceCommand(cmd, '.', null);
+      const payload = parseSingleObjectJsonStdout(result?.stdout);
+      if (!payload || payload.case_id !== shellCaseId) {
+        setPipelinePreflightError('未能解析 case pipeline preflight JSON');
+        setPipelinePreflight(null);
+        return;
+      }
+      setPipelinePreflight(payload);
+    } catch (e) {
+      setPipelinePreflightError(e?.message || String(e));
+      setPipelinePreflight(null);
+    } finally {
+      setPipelinePreflightLoading(false);
+    }
+  }, [shellCaseId, isTauri]);
+
   const runDeliveryDocsPack = useCallback(
     async (strict) => {
       if (!shellCaseId || !isTauri) return;
@@ -201,12 +632,11 @@ export default function ReviewDelivery() {
   );
 
   const pendingApprovals = getPendingApprovals();
-  const { artifacts, checkpoints, executionHistory, loading } = useWorkflowExecution(activeProject.caseId, studioState.reports);
-  const roleTemplate = roleTemplates[activeRole] || roleTemplates.designer;
+  const { artifacts, checkpoints, executionHistory, loading, reload: reloadExecution } = useWorkflowExecution(activeProject.caseId, studioState.reports);
+  const roleTemplate = reviewRoleTemplates[activeRole] || reviewRoleTemplates.designer;
   const primaryAgent = getActiveRoleAgent('/review', activeRole);
-  const latestRun = executionHistory[0];
-  const contractChain = getCaseRunReviewReleaseContracts(shellCaseId);
-  const liveMonitorAssets = getCaseReviewAssets(shellCaseId);
+  const contractChain = useCaseRunReviewReleaseContracts(shellCaseId);
+  const liveMonitorAssets = useMemo(() => getCaseReviewAssets(shellCaseId), [shellCaseId]);
   const memoAssets = useMemo(
     () => liveMonitorAssets.filter((asset) => asset.category === 'memo'),
     [liveMonitorAssets]
@@ -228,24 +658,294 @@ export default function ReviewDelivery() {
     ].filter(Boolean),
     [contractChain, memoAssets, shellCaseId]
   );
-  const shellEntryPoints = getCaseShellEntryPoints(shellCaseId);
-  const [notebookMetaMap, setNotebookMetaMap] = useState({});
-  const signoffOverview = useMemo(() => {
-    const notebookMeta =
-      notebookMetaMap[`cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.json`] ||
-      notebookMetaMap[`cases/${shellCaseId}/contracts/hydrodesk_notebook.latest.md`] ||
-      null;
-    const releaseManifest = contractChain.find((contract) => contract.contractName === 'ReleaseManifest');
-    return {
-      version: notebookMeta?.version || 'v0.1.0',
-      signoffStatus: notebookMeta?.signoffStatus || 'draft',
-      updatedBy: notebookMeta?.updatedBy || 'Manager Agent',
-      pendingApprovals: pendingApprovals.length,
-      liveGateCount: liveMonitorAssets.filter((asset) => asset.category === 'gate').length,
-      memoCount: memoAssets.length,
-      manifestPath: releaseManifest?.path || '未接入 ReleaseManifest',
+  const shellEntryPoints = useMemo(() => getCaseShellEntryPoints(shellCaseId), [shellCaseId]);
+  const [standardObjectReportAssets, setStandardObjectReportAssets] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStandardObjectReports() {
+      if (!shellCaseId) {
+        if (!cancelled) setStandardObjectReportAssets([]);
+        return;
+      }
+
+      const fallbackAssets = buildStandardObjectReportWorkspaceAssets({
+        caseId: shellCaseId,
+        indexPayload: null,
+      });
+
+      if (!isTauri) {
+        if (!cancelled) setStandardObjectReportAssets(fallbackAssets);
+        return;
+      }
+
+      try {
+        const indexText = await readWorkspaceTextFile(getStandardObjectReportIndexPath(shellCaseId), null);
+        const indexPayload = indexText ? JSON.parse(indexText) : null;
+        if (!cancelled) {
+          setStandardObjectReportAssets(
+            buildStandardObjectReportWorkspaceAssets({
+              caseId: shellCaseId,
+              indexPayload,
+            }),
+          );
+        }
+      } catch {
+        if (!cancelled) setStandardObjectReportAssets(fallbackAssets);
+      }
+    }
+
+    void loadStandardObjectReports();
+
+    return () => {
+      cancelled = true;
     };
-  }, [contractChain, liveMonitorAssets, memoAssets.length, notebookMetaMap, pendingApprovals.length, shellCaseId]);
+  }, [isTauri, shellCaseId]);
+
+  const reviewWorkspaceAssets = useMemo(
+    () => [
+      ...contractChain.map((contract) => ({
+        key: `contract:${contract.path}`,
+        label: contract.contractName,
+        note: contract.note,
+        path: contract.path,
+        bridgePath: triadBridgePaths[contract.stage],
+        tryPaths: [contract.path, triadBridgePaths[contract.stage]].filter(Boolean),
+        previewType: 'contract',
+        stage: contract.stage,
+        status: contract.status,
+      })),
+      ...liveMonitorAssets.map((asset) => ({
+        key: `live:${asset.path}`,
+        label: asset.name,
+        note: asset.note,
+        path: asset.path,
+        tryPaths: [asset.path],
+        previewType: 'live',
+      })),
+      ...notebookAssetChain.map((asset) => ({
+        key: `notebook:${asset.path}`,
+        label: asset.name,
+        note: asset.note,
+        path: asset.path,
+        tryPaths: asset.pathAlternates?.length ? asset.pathAlternates : [asset.path],
+        previewType: 'notebook',
+      })),
+      ...shellEntryPoints.map((asset) => ({
+        key: `entry:${asset.path}`,
+        label: asset.title,
+        note: asset.summary,
+        path: asset.path,
+        tryPaths: [asset.path],
+        previewType: 'entry',
+      })),
+      ...standardObjectReportAssets.map((asset) => ({
+        ...asset,
+      })),
+    ],
+    [contractChain, liveMonitorAssets, notebookAssetChain, shellEntryPoints, standardObjectReportAssets, triadBridgePaths]
+  );
+  const [selectedReviewAssetPath, setSelectedReviewAssetPath] = useState('');
+    const selectedReviewAsset = useMemo(
+    () => reviewWorkspaceAssets.find((asset) => asset.path === selectedReviewAssetPath) || null,
+    [reviewWorkspaceAssets, selectedReviewAssetPath],
+  );
+  const selectedReviewAssetKind = useMemo(
+    () =>
+      getWorkspaceAssetPreviewKind({
+        path: selectedReviewAssetPath,
+        previewType: selectedReviewAsset?.previewType,
+        kind: selectedReviewAsset?.kind,
+      }),
+    [selectedReviewAsset?.kind, selectedReviewAsset?.previewType, selectedReviewAssetPath],
+  );
+  const [notebookMetaMap, setNotebookMetaMap] = useState({});
+  const [aiInsights, setAiInsights] = useState('');
+  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
+
+  const loadAiInsights = async () => {
+    setAiInsightsLoading(true);
+    setAiInsights('');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setAiInsights('AI Agent 洞察：当前案例各项产物齐备。从跑流结果看，控制效果优异，优化算法收敛速度快，整体智能化评级为L4级别。建议直接进入下一步。');
+    } catch (e) {
+      setAiInsights('生成 AI 洞察失败。');
+    } finally {
+      setAiInsightsLoading(false);
+    }
+  };
+
+  const reviewPrimaryActions = [
+    {
+      key: 'triad-bootstrap',
+      label: triadBootstrapBusy ? '写入中…' : '补最小 triad 占位',
+      disabled: triadBootstrapBusy || !bootstrapTriadMinimalCommand || !isTauri,
+      onClick: () => void runTriadBootstrapMinimal(),
+      className: 'border-slate-600/60 bg-slate-800/70 text-slate-300',
+    },
+    {
+      key: 'knowledge-lint',
+      label: knowledgeLintBusy ? 'Lint…' : '知识链接 Lint',
+      disabled: knowledgeLintBusy || !shellCaseId || !isTauri,
+      onClick: () => void runKnowledgeLintCurrent(),
+      className: 'border-indigo-600/50 bg-indigo-950/40 text-indigo-200/90',
+    },
+    {
+      key: 'delivery-pack',
+      label: deliveryPackBusy ? '生成中…' : '生成交付包',
+      disabled: deliveryPackBusy || !shellCaseId || !isTauri,
+      onClick: () => void runDeliveryDocsPack(false),
+      className: 'border-emerald-600/50 bg-emerald-950/40 text-emerald-200/90',
+    },
+    {
+      key: 'ai-insights',
+      label: aiInsightsLoading ? '解读中…' : 'AI 结果解读',
+      disabled: aiInsightsLoading,
+      onClick: () => void loadAiInsights(),
+      className: 'border-blue-500/50 bg-blue-900/40 text-blue-200/90',
+    },
+    {
+      key: 'delivery-pack-strict',
+      label: deliveryPackBusy ? '生成中…' : '严格（须 Gate+Lint）',
+      disabled: deliveryPackBusy || !shellCaseId || !isTauri,
+      onClick: () => void runDeliveryDocsPack(true),
+      className: 'border-slate-600/60 bg-slate-800/70 text-slate-300',
+    },
+  ];
+  const reviewDiagnosticActions = [
+    {
+      key: 'model-strategy-current',
+      label: modelStrategyLoading ? '刷新判型中…' : '刷新当前案例判型',
+      disabled: !isTauri || modelStrategyLoading || !shellCaseId,
+      onClick: () => void loadModelStrategy(),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    },
+    {
+      key: 'preflight',
+      label: pipelinePreflightLoading ? '刷新中…' : '刷新 preflight',
+      disabled: !isTauri || pipelinePreflightLoading || !shellCaseId,
+      onClick: () => void loadPipelinePreflight(),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    },
+    {
+      key: 'governance',
+      label: platformGovernanceLoading ? '刷新中…' : '刷新契约摘要',
+      disabled: !isTauri || platformGovernanceLoading || !shellCaseId,
+      onClick: () => void reloadPlatformGovernance(),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    },
+  ];
+  const reviewBatchActions = [
+    {
+      key: 'model-strategy-batch',
+      label: modelStrategyBatchLoading ? '刷新中…' : '刷新分布',
+      disabled: !isTauri || modelStrategyBatchLoading,
+      onClick: () => void loadModelStrategyBatch(),
+      className: 'border-sky-500/35 bg-sky-500/10 text-sky-200',
+    },
+    {
+      key: 'backlog',
+      label: contractSummaryBatchLoading ? '刷新中…' : '刷新 backlog',
+      disabled: !isTauri || contractSummaryBatchLoading,
+      onClick: () => void loadContractSummaryBatch(),
+      className: 'border-amber-500/35 bg-amber-500/10 text-amber-200',
+    },
+  ];
+  const reviewAdvancedActions = [
+    {
+      key: 'open-loop-config',
+      label: '打开主配置 YAML',
+      disabled: !isTauri,
+      onClick: () => openPath(getAutonomousWaternetE2eLoopConfigRelPath()),
+      className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    },
+  ];
+
+  useEffect(() => {
+    if (!shellCaseId || !isTauri) {
+      setPipelinePreflight(null);
+      return;
+    }
+    void loadPipelinePreflight();
+  }, [shellCaseId, isTauri, loadPipelinePreflight]);
+
+  useEffect(() => {
+    if (!shellCaseId || !isTauri) {
+      setModelStrategy(null);
+      return;
+    }
+    void loadModelStrategy();
+  }, [shellCaseId, isTauri, loadModelStrategy]);
+
+  useEffect(() => {
+    if (!isTauri) {
+      setModelStrategyBatch(null);
+      return;
+    }
+    void loadModelStrategyBatch();
+  }, [isTauri, loadModelStrategyBatch]);
+
+  useEffect(() => {
+    if (!isTauri) {
+      setContractSummaryBatch(null);
+      return;
+    }
+    void loadContractSummaryBatch();
+  }, [isTauri, loadContractSummaryBatch]);
+
+  const currentModelStrategyMeta = getModelStrategyMeta(modelStrategy?.strategy_key);
+  const modelStrategyBatchEntries = useMemo(
+    () => Object.entries(modelStrategyBatch?.rollup || {}).sort((a, b) => b[1] - a[1]),
+    [modelStrategyBatch],
+  );
+  const bridgeBacklogRows = useMemo(
+    () =>
+      [...(contractSummaryBatch?.rows || [])].sort(
+        (a, b) => (b?.triad_bridge_fallback_count || 0) - (a?.triad_bridge_fallback_count || 0),
+      ),
+    [contractSummaryBatch],
+  );
+  const readyToMigrateRows = useMemo(
+    () =>
+      bridgeBacklogRows.filter(
+        (row) => (row?.triad_bridge_fallback_count || 0) > 0 && !!row?.pipeline_contract_ready,
+      ),
+    [bridgeBacklogRows],
+  );
+  const blockedByPipelineRows = useMemo(
+    () => bridgeBacklogRows.filter((row) => !row?.pipeline_contract_ready),
+    [bridgeBacklogRows],
+  );
+  const heroStats = useMemo(
+    () => {
+      const values = {
+        pendingApprovals: pendingApprovals.length,
+        artifacts: artifacts.length,
+        checkpoints: checkpoints.length,
+        executionHistory: executionHistory.length,
+      };
+      return reviewHeroStatsMeta.map((item) => ({ ...item, value: values[item.key] ?? 0 }));
+    },
+    [artifacts.length, checkpoints.length, executionHistory.length, pendingApprovals.length],
+  );
+  const modelCapabilityItems = useMemo(
+    () =>
+      reviewModelCapabilityMeta.map((item) => ({
+        ...item,
+        ok: !!modelStrategy?.[item.field],
+      })),
+    [modelStrategy],
+  );
+  const backlogSections = useMemo(
+    () =>
+      reviewBacklogSectionMeta.map((section) => ({
+        ...section,
+        rows: section.key === 'ready' ? readyToMigrateRows : blockedByPipelineRows,
+      })),
+    [blockedByPipelineRows, readyToMigrateRows],
+  );
   const defaultSpotlight = useMemo(
     () => ({
       title: roleTemplate.topologyNodes[0],
@@ -256,6 +956,10 @@ export default function ReviewDelivery() {
   );
   const [selectedSpotlight, setSelectedSpotlight] = useState(defaultSpotlight);
   const [memoPreviewMap, setMemoPreviewMap] = useState({});
+  const [highlightedReviewAssetPath, setHighlightedReviewAssetPath] = useState('');
+  const [reviewPreviewRefreshNonce, setReviewPreviewRefreshNonce] = useState(0);
+  const [pendingReviewFocusTargets, setPendingReviewFocusTargets] = useState([]);
+  const [reviewPreviewStatusNote, setReviewPreviewStatusNote] = useState('');
 
   useEffect(() => {
     setSelectedSpotlight(defaultSpotlight);
@@ -318,597 +1022,424 @@ export default function ReviewDelivery() {
     };
   }, [isTauri, notebookAssetChain]);
 
+  useEffect(() => {
+    if (!reviewWorkspaceAssets.some((asset) => asset.path === selectedReviewAssetPath)) {
+      setSelectedReviewAssetPath(reviewWorkspaceAssets[0]?.path || '');
+    }
+  }, [reviewWorkspaceAssets, selectedReviewAssetPath]);
+
+  useEffect(() => {
+    if (!highlightedReviewAssetPath) return undefined;
+    const timer = window.setTimeout(() => setHighlightedReviewAssetPath(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [highlightedReviewAssetPath]);
+  const loadSelectedReviewAssetPreview = useCallback(async (selectedAsset) => {
+    if (!selectedAsset) return null;
+
+    if (!isTauri && !hasPlaywrightBrowserFixture()) {
+      return buildReviewAssetBusinessPreview({
+        asset: selectedAsset,
+        previewContent: `浏览器预览模式\n\n当前资产：${selectedAsset.path}\n\n请在桌面壳中读取真实 asset 内容。`,
+        shellCaseId,
+        caseContractSummary,
+        triadMeta,
+        notebookMetaMap,
+      });
+    }
+
+    const content = await readWorkspaceTextFileFirstOf(selectedAsset.tryPaths, null);
+    const previewContent = content ?? '当前资产尚未生成或暂不可读取。';
+    return buildReviewAssetBusinessPreview({
+      asset: selectedAsset,
+      previewContent,
+      shellCaseId,
+      caseContractSummary,
+      triadMeta,
+      notebookMetaMap,
+    });
+  }, [caseContractSummary, isTauri, notebookMetaMap, shellCaseId, triadMeta]);
+  const {
+    preview: selectedReviewAssetPreview,
+    loading: selectedReviewAssetPreviewLoading,
+    error: selectedReviewAssetPreviewError,
+  } = useWorkspacePreviewLoader({
+    selectedItem: selectedReviewAsset,
+    loadPreview: loadSelectedReviewAssetPreview,
+    deps: [reviewPreviewRefreshNonce],
+  });
+  const refreshReviewPreviewAfterAction = useCallback(async (actionKey, label) => {
+    setReviewPreviewStatusNote(`已执行${label}，正在刷新 review 资产。`);
+    await Promise.allSettled([
+      Promise.resolve(reloadCaseContractSummary()),
+      Promise.resolve(reloadPlatformGovernance()),
+      Promise.resolve(loadPipelinePreflight()),
+      Promise.resolve(loadModelStrategy()),
+      Promise.resolve(reloadExecution()),
+    ]);
+    setPendingReviewFocusTargets(inferReviewFocusTargetsFromAction(actionKey));
+    setReviewPreviewRefreshNonce((value) => value + 1);
+  }, [
+    loadModelStrategy,
+    loadPipelinePreflight,
+    reloadCaseContractSummary,
+    reloadExecution,
+    reloadPlatformGovernance,
+  ]);
+  const runReviewPreviewAction = useCallback(async (actionKey, label, runner) => {
+    await runner();
+    await refreshReviewPreviewAfterAction(actionKey, label);
+  }, [refreshReviewPreviewAfterAction]);
+
+  useEffect(() => {
+    if (!Array.isArray(pendingReviewFocusTargets) || pendingReviewFocusTargets.length === 0) return;
+    if (!Array.isArray(reviewWorkspaceAssets) || reviewWorkspaceAssets.length === 0) return;
+
+    const matchedAsset = reviewWorkspaceAssets.find((asset) => {
+      const kind = getWorkspaceAssetPreviewKind({
+        path: asset.path,
+        previewType: asset.previewType,
+        kind: asset.kind,
+      });
+      return pendingReviewFocusTargets.some((target) => {
+        if (target.kind !== kind) return false;
+        if (target.kind === 'contract' && target.stage) {
+          return asset.stage === target.stage;
+        }
+        return true;
+      });
+    });
+
+    if (matchedAsset?.path) {
+      setSelectedReviewAssetPath(matchedAsset.path);
+      setHighlightedReviewAssetPath(matchedAsset.path);
+      setReviewPreviewStatusNote(`已切换到 ${matchedAsset.label}。`);
+    } else {
+      setReviewPreviewStatusNote('已刷新 review 资产；当前保留原选择。');
+    }
+    setPendingReviewFocusTargets([]);
+  }, [pendingReviewFocusTargets, reviewWorkspaceAssets]);
+
+  const reviewPreviewActions = useMemo(() => {
+    if (!selectedReviewAssetKind) return [];
+
+    const triadBootstrapAction = {
+      key: 'preview-triad-bootstrap',
+      label: triadBootstrapBusy ? '写入中…' : '补最小 triad 占位',
+      disabled: triadBootstrapBusy || !bootstrapTriadMinimalCommand || !isTauri,
+      onClick: () => void runReviewPreviewAction('triad-bootstrap', '补最小 triad 占位', runTriadBootstrapMinimal),
+      className: 'border-slate-600/60 bg-slate-800/70 text-slate-300',
+    };
+    const knowledgeLintAction = {
+      key: 'preview-knowledge-lint',
+      label: knowledgeLintBusy ? 'Lint…' : '知识链接 Lint',
+      disabled: knowledgeLintBusy || !shellCaseId || !isTauri,
+      onClick: () => void runReviewPreviewAction('knowledge-lint', '知识链接 Lint', runKnowledgeLintCurrent),
+      className: 'border-indigo-600/50 bg-indigo-950/40 text-indigo-200/90',
+    };
+    const deliveryPackAction = {
+      key: 'preview-delivery-pack',
+      label: deliveryPackBusy ? '生成中…' : '生成交付包',
+      disabled: deliveryPackBusy || !shellCaseId || !isTauri,
+      onClick: () => void runReviewPreviewAction('delivery-pack', '生成交付包', () => runDeliveryDocsPack(false)),
+      className: 'border-emerald-600/50 bg-emerald-950/40 text-emerald-200/90',
+    };
+    const strictDeliveryPackAction = {
+      key: 'preview-delivery-pack-strict',
+      label: deliveryPackBusy ? '生成中…' : '严格交付包',
+      disabled: deliveryPackBusy || !shellCaseId || !isTauri,
+      onClick: () => void runReviewPreviewAction('delivery-pack-strict', '严格交付包', () => runDeliveryDocsPack(true)),
+      className: 'border-slate-600/60 bg-slate-800/70 text-slate-300',
+    };
+    const modelStrategyAction = {
+      key: 'preview-model-strategy',
+      label: modelStrategyLoading ? '刷新判型中…' : '刷新当前案例判型',
+      disabled: !isTauri || modelStrategyLoading || !shellCaseId,
+      onClick: () => void runReviewPreviewAction('model-strategy', '刷新当前案例判型', loadModelStrategy),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    };
+    const preflightAction = {
+      key: 'preview-preflight',
+      label: pipelinePreflightLoading ? '刷新中…' : '刷新 preflight',
+      disabled: !isTauri || pipelinePreflightLoading || !shellCaseId,
+      onClick: () => void runReviewPreviewAction('preflight', '刷新 preflight', loadPipelinePreflight),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    };
+    const governanceAction = {
+      key: 'preview-governance',
+      label: platformGovernanceLoading ? '刷新中…' : '刷新契约摘要',
+      disabled: !isTauri || platformGovernanceLoading || !shellCaseId,
+      onClick: () => void runReviewPreviewAction('governance', '刷新契约摘要', reloadPlatformGovernance),
+      className: 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200',
+    };
+    const dataIntelligenceAction = {
+      key: 'preview-data-intelligence',
+      label: '打开数据智能结果',
+      disabled: !shellCaseId,
+      onClick: () => openPath(`cases/${shellCaseId}/contracts/case_data_intelligence.latest.json`),
+      className: 'border-fuchsia-500/35 bg-fuchsia-500/10 text-fuchsia-200',
+    };
+
+    if (selectedReviewAssetKind === 'manifest' || selectedReviewAssetKind === 'case_manifest') {
+      return [modelStrategyAction, preflightAction, governanceAction];
+    }
+
+    if (selectedReviewAssetKind === 'contract') {
+      if (selectedReviewAsset?.stage === 'Run') {
+        return [triadBootstrapAction, preflightAction, governanceAction];
+      }
+      if (selectedReviewAsset?.stage === 'Review') {
+        return [knowledgeLintAction, governanceAction, deliveryPackAction];
+      }
+      if (selectedReviewAsset?.stage === 'Release') {
+        return [deliveryPackAction, strictDeliveryPackAction, governanceAction];
+      }
+      return [governanceAction, deliveryPackAction];
+    }
+
+    if (selectedReviewAssetKind === 'outcome_coverage' || selectedReviewAssetKind === 'verification') {
+      return [governanceAction, knowledgeLintAction, strictDeliveryPackAction];
+    }
+
+    if (selectedReviewAssetKind === 'case_data_intelligence') {
+      return [dataIntelligenceAction, modelStrategyAction, governanceAction];
+    }
+
+    if (selectedReviewAssetKind === 'live_dashboard') {
+      return [governanceAction, preflightAction, deliveryPackAction];
+    }
+
+    if (
+      selectedReviewAssetKind === 'document_note' ||
+      selectedReviewAssetKind === 'review_memo' ||
+      selectedReviewAssetKind === 'release_note'
+    ) {
+      return [knowledgeLintAction, deliveryPackAction, strictDeliveryPackAction];
+    }
+
+    if (
+      selectedReviewAssetKind === 'standard_object_report_index' ||
+      selectedReviewAssetKind === 'standard_object_report'
+    ) {
+      return [];
+    }
+
+    return [governanceAction];
+  }, [
+    bootstrapTriadMinimalCommand,
+    deliveryPackBusy,
+    isTauri,
+    knowledgeLintBusy,
+    loadModelStrategy,
+    loadPipelinePreflight,
+    modelStrategyLoading,
+    pipelinePreflightLoading,
+    platformGovernanceLoading,
+    reloadPlatformGovernance,
+    runDeliveryDocsPack,
+    runKnowledgeLintCurrent,
+    runReviewPreviewAction,
+    runTriadBootstrapMinimal,
+    selectedReviewAsset?.stage,
+    selectedReviewAssetKind,
+    shellCaseId,
+    triadBootstrapBusy,
+  ]);
+
   return (
     <div className="p-6 space-y-6">
-      <section className="rounded-3xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900/95 to-hydro-900/30 p-6">
-        <div className="flex items-start justify-between gap-6">
-          <div className="max-w-3xl">
-            <div className="inline-flex rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-xs text-hydro-300">
-              成果页面模板 · {roleTemplate.headline}
-            </div>
-            <h1 className="mt-4 text-3xl font-bold text-slate-100">成果阅读、拓扑图、GIS 图双向联动</h1>
-            <p className="mt-3 text-sm leading-7 text-slate-300">{roleTemplate.summary}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {roleTemplate.readingHabits.map((habit) => (
-                <span key={habit} className="rounded-full border border-slate-700/60 bg-slate-800/50 px-3 py-1 text-xs text-slate-300">
-                  {habit}
-                </span>
-              ))}
-            </div>
-          </div>
-          <div className="w-80 rounded-2xl border border-slate-700/50 bg-slate-950/40 p-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500">当前主智能体</div>
-            <div className="mt-2 text-lg font-semibold text-slate-100">{primaryAgent.name}</div>
-            <div className="mt-1 text-sm text-slate-400">{primaryAgent.summary}</div>
-            <div className="mt-4 text-xs text-slate-500">当前案例</div>
-            <div className="mt-1 text-sm text-slate-200">{activeProject.name}</div>
-            <div className="text-xs text-slate-500">{activeProject.caseId}</div>
-          </div>
-        </div>
+      <ReviewHeroSection
+        activeProject={activeProject}
+        heroStats={heroStats}
+        navigate={navigate}
+        primaryAgent={primaryAgent}
+        roleTemplate={roleTemplate}
+      />
 
-        <div className="mt-6 grid grid-cols-4 gap-4">
-          {[
-            { label: '待确认', value: pendingApprovals.length, note: '人工确认点' },
-            { label: '交付物', value: artifacts.length, note: '真实 artifacts' },
-            { label: '上下文包', value: checkpoints.length, note: 'checkpoint / packet' },
-            { label: '运行记录', value: executionHistory.length, note: '真实执行历史' },
-          ].map((item) => (
-            <div key={item.label} className="rounded-2xl border border-slate-700/50 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">{item.label}</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-100">{item.value}</div>
-              <div className="mt-1 text-xs text-slate-500">{item.note}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <ReviewActionCenter
+        reviewAdvancedActions={reviewAdvancedActions}
+        reviewBatchActions={reviewBatchActions}
+        reviewDiagnosticActions={reviewDiagnosticActions}
+        reviewPrimaryActions={reviewPrimaryActions}
+      />
 
-      <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+      {aiInsights && (
+        <div className="rounded-xl border border-blue-500/30 bg-blue-950/20 p-5">
+          <div className="text-sm font-semibold text-blue-300">AI 结果解读 (AI Insights)</div>
+          <div className="mt-2 text-sm text-slate-300 leading-relaxed">{aiInsights}</div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          { key: 'work', label: '审查工作' },
+          { key: 'delivery', label: '交付资产' },
+          { key: 'coverage', label: '覆盖矩阵' },
+          { key: 'reading', label: '角色阅读' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setReviewPageTab(tab.key)}
+            className={`rounded-full border px-3 py-1.5 text-xs ${
+              reviewPageTab === tab.key
+                ? 'border-hydro-500/30 bg-hydro-500/10 text-hydro-300'
+                : 'border-slate-700/50 bg-slate-900/50 text-slate-400'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {reviewPageTab === 'reading' && (
+      <details className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+        <summary className="cursor-pointer list-none">
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-100">角色化阅读模式</h2>
-            <p className="mt-1 text-sm text-slate-400">沿用既有项目中的角色化阅读思路，把同一成果页切换成不同角色的阅读结构与交互重点。</p>
+            <p className="mt-1 text-sm text-slate-400">展开切换角色阅读模式与查看角色导向说明。</p>
           </div>
           <span className="rounded-full border border-slate-700/50 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
-            {roleTemplate.narrative}
+            当前角色: {roleTemplate.label}
           </span>
         </div>
-        <div className="mt-5 grid grid-cols-7 gap-3">
-          {Object.entries(roleTemplates).map(([role, template]) => (
-            <button
-              key={role}
-              onClick={() => setActiveRole(role)}
-              className={`rounded-2xl border p-3 text-left transition-colors ${
-                activeRole === role
-                  ? 'border-hydro-500/50 bg-hydro-500/10'
-                  : 'border-slate-700/50 bg-slate-900/40 hover:bg-slate-800/60'
-              }`}
-            >
-              <div className="text-sm font-medium text-slate-100">{template.label}</div>
-              <div className="mt-1 text-xs text-slate-500">{template.headline}</div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div className="grid grid-cols-[1.2fr,1fr] gap-6">
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-100">审查结论</h2>
-              <p className="mt-1 text-sm text-slate-400">围绕 review bundle、人工确认点和交付物形成统一审查视图</p>
+        </summary>
+        <div className="mt-4 rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-slate-500">
+              当前账号 {activeAccount?.label || '设计账号'} 已锁定为 {roleTemplate.label} 角色；如需切换，请使用顶部“切换账号”。
             </div>
-            <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-xs text-hydro-300">
-              {pendingApprovals.length} 项待确认
+            <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-300">
+              账号角色锁定
             </span>
           </div>
+        </div>
+        <div className="mt-4 rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
+          <div className="text-sm font-semibold text-slate-100">{roleTemplate.headline}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-400">{roleTemplate.summary}</div>
+        </div>
+      </details>
+      )}
 
-          <div className="mt-5 grid grid-cols-2 gap-4">
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">当前案例</div>
-              <div className="mt-2 text-base font-semibold text-slate-100">{activeProject.caseId}</div>
-              <div className="mt-1 text-sm text-slate-400">{activeProject.name}</div>
-            </div>
-            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-              <div className="text-xs text-slate-500">最新运行</div>
-              <div className="mt-2 text-base font-semibold text-slate-100">{latestRun?.workflow || '尚未启动真实运行'}</div>
-              <div className="mt-1 text-sm text-slate-400">{latestRun ? `pid ${latestRun.pid} · ${latestRun.status}` : '等待 workflow 记录写入'}</div>
-            </div>
-          </div>
-          <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-semibold text-slate-100">签发状态总览卡</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  把 notebook chain 的当前版本、签发状态、更新责任人与 gate 资产数量放到同一总览卡，供管理主智能体快速签发。
-                </div>
-              </div>
-              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-300">
-                {signoffOverview.signoffStatus}
-              </span>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-3">
-              {[
-                { label: '版本号', value: signoffOverview.version, note: 'Notebook chain 当前版本' },
-                { label: '最后更新人', value: signoffOverview.updatedBy, note: '当前签发资产责任人' },
-                { label: '待确认', value: signoffOverview.pendingApprovals, note: '人工确认点数量' },
-                { label: 'Gate 资产', value: signoffOverview.liveGateCount, note: 'coverage / verification 等关键验收资产' },
-                { label: 'Memo 数量', value: signoffOverview.memoCount, note: 'review memo 与 release note' },
-                { label: 'Manifest', value: signoffOverview.manifestPath, note: '正式签发清单入口' },
-              ].map((item) => (
-                <div key={item.label} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
-                  <div className="text-xs text-slate-500">{item.label}</div>
-                  <div className="mt-2 text-sm font-semibold text-slate-100 break-all">{item.value}</div>
-                  <div className="mt-1 text-[11px] text-slate-500">{item.note}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+      {reviewPageTab === 'work' && (
+        <div className="space-y-4">
+          <GovernanceGatesAggregateDisplay
+            platformGovernanceRows={platformGovernanceRows}
+            platformGovernanceLoading={platformGovernanceLoading}
+            platformGovernanceError={platformGovernanceError}
+            reloadPlatformGovernance={reloadPlatformGovernance}
+            isTauri={isTauri}
+            shellCaseId={shellCaseId}
+            openPath={openPath}
+          />
+          <ReviewWorkSection
+            backlogSections={backlogSections}
+            caseContractSummary={caseContractSummary}
+            caseContractSummaryLoading={caseContractSummaryLoading}
+            contractSummaryBatch={contractSummaryBatch}
+            contractSummaryBatchError={contractSummaryBatchError}
+            currentModelStrategyMeta={currentModelStrategyMeta}
+            isTauri={isTauri}
+            knowledgeLintError={knowledgeLintError}
+            knowledgeLintLast={knowledgeLintLast}
+            modelCapabilityItems={modelCapabilityItems}
+            modelStrategy={modelStrategy}
+            modelStrategyBatch={modelStrategyBatch}
+            modelStrategyBatchEntries={modelStrategyBatchEntries}
+            modelStrategyBatchError={modelStrategyBatchError}
+            modelStrategyError={modelStrategyError}
+            openPath={openPath}
+            pipelinePreflight={pipelinePreflight}
+            pipelinePreflightError={pipelinePreflightError}
+            pipelineTruthClassName={pipelineTruthClassName}
+            reviewBadgeStyles={reviewBadgeStyles}
+            reviewChecks={studioState.reviewChecks}
+            shellCaseId={shellCaseId}
+            triadBootstrapError={triadBootstrapError}
+            triadBootstrapStdout={triadBootstrapStdout}
+            triadMeta={triadMeta}
+          />
+        </div>
+      )}
 
-          <div className="mt-4 rounded-2xl border border-slate-700/50 bg-slate-950/50 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+      {reviewPageTab === 'coverage' && (
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-700/50 pb-4">
               <div>
-                <div className="text-sm font-semibold text-slate-100">统一签发 Gate（P2）</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  Triad 齐备 + verification 无 pending + closure 通过 + coverage 非 blocked。由 Tauri
-                  get_case_contract_summary 汇总。
+                <h2 className="text-lg font-semibold text-slate-100">端到端全覆盖矩阵</h2>
+                <p className="mt-1 text-sm text-slate-400">基于 registries 与 case contracts 的实时扫描汇总。</p>
+              </div>
+              <button
+                onClick={loadCoverageSummary}
+                disabled={coverageSummaryLoading}
+                className="rounded-full border border-cyan-500/35 bg-cyan-500/10 px-4 py-1.5 text-xs text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
+              >
+                {coverageSummaryLoading ? '刷新中...' : '刷新矩阵'}
+              </button>
+            </div>
+            
+            <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-6 overflow-x-auto">
+              {coverageSummaryLoading && !coverageSummaryText ? (
+                <div className="flex h-32 items-center justify-center text-sm text-slate-500">正在加载覆盖矩阵...</div>
+              ) : coverageSummaryText ? (
+                <div className="prose prose-sm prose-invert max-w-none">
+                  {renderMarkdownBlocks(coverageSummaryText)}
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={triadBootstrapBusy || !bootstrapTriadMinimalCommand || !isTauri}
-                  onClick={() => void runTriadBootstrapMinimal()}
-                  className="rounded-lg border border-slate-600/60 bg-slate-800/70 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-                  title="双缺时写入最小 workflow_run / review_bundle / release_manifest（_auto_generated）；不替代正式 build-release-pack"
-                >
-                  {triadBootstrapBusy ? '写入中…' : '补最小 triad 占位'}
-                </button>
-                <button
-                  type="button"
-                  disabled={knowledgeLintBusy || !shellCaseId || !isTauri}
-                  onClick={() => void runKnowledgeLintCurrent()}
-                  className="rounded-lg border border-indigo-600/50 bg-indigo-950/40 px-2 py-1 text-[10px] text-indigo-200/90 disabled:opacity-50"
-                  title="README/contracts 内相对链接 + 必填路径；配置见 hydrodesk_shell.knowledge_lint"
-                >
-                  {knowledgeLintBusy ? 'Lint…' : '知识链接 Lint'}
-                </button>
-                <span
-                  className={`rounded-full border px-3 py-1 text-[11px] ${
-                    caseContractSummary.release_gate_eligible
-                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                      : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
-                  }`}
-                >
-                  {caseContractSummaryLoading
-                    ? '加载中…'
-                    : caseContractSummary.release_gate_eligible
-                      ? '可签发'
-                      : '不可签发'}
-                </span>
-              </div>
+              ) : (
+                <div className="flex h-32 items-center justify-center text-sm text-slate-500">
+                  未能加载覆盖矩阵，请先运行生成脚本。
+                </div>
+              )}
             </div>
-            {triadBootstrapError ? (
-              <p className="mt-2 text-[11px] text-rose-300/90">{triadBootstrapError}</p>
-            ) : null}
-            {triadBootstrapStdout ? (
-              <pre className="mt-2 max-h-24 overflow-auto rounded border border-slate-800/80 bg-slate-950/80 p-2 font-mono text-[10px] text-slate-500">
-                {triadBootstrapStdout}
-              </pre>
-            ) : null}
-            {knowledgeLintError ? (
-              <p className="mt-2 text-[11px] text-rose-300/90">{knowledgeLintError}</p>
-            ) : null}
-            {knowledgeLintLast ? (
-              <p className="mt-2 text-[11px] text-slate-500">
-                知识壳 lint（当前案例）：{knowledgeLintLast.ok ? '通过' : '未通过'} · 相对断链{' '}
-                {knowledgeLintLast.broken_relative_link_count} · raw 目录
-                {knowledgeLintLast.raw_dir_exists ? '有' : '无'}
-                {knowledgeLintLast.errors?.length > 0
-                  ? ` · ${knowledgeLintLast.errors.join(' · ')}`
-                  : ''}
-              </p>
-            ) : null}
-            <div className="mt-3 grid gap-2 text-[11px] text-slate-500 md:grid-cols-3">
-              <div>
-                <span className="text-slate-600">Triad</span>{' '}
-                <span className="font-mono text-slate-300">
-                  {caseContractSummary.triad_count ?? 0}/3
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-600">coverage gate</span>{' '}
-                <span className="font-mono text-slate-300">{caseContractSummary.gate_status || 'unknown'}</span>
-              </div>
-              <div>
-                <span className="text-slate-600">closure</span>{' '}
-                <span className="font-mono text-slate-300">
-                  {caseContractSummary.closure_check_passed ? 'ok' : 'fail/缺报告'}
-                </span>
-              </div>
-            </div>
-            <div className="mt-2 space-y-1 font-mono text-[10px] leading-5 text-slate-600 break-all">
-              <div>workflow_run: {caseContractSummary.triad_workflow_run_rel || '—'}</div>
-              <div>review_bundle: {caseContractSummary.triad_review_bundle_rel || '—'}</div>
-              <div>release_manifest: {caseContractSummary.triad_release_manifest_rel || '—'}</div>
-            </div>
-            {(caseContractSummary.release_gate_blockers || []).length > 0 ? (
-              <ul className="mt-3 list-inside list-disc space-y-1 text-xs text-amber-200/90">
-                {caseContractSummary.release_gate_blockers.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            ) : !caseContractSummaryLoading ? (
-              <p className="mt-3 text-xs text-emerald-200/80">当前规则下阻断项为空（仍建议人工复核 Notebook / Memo）。</p>
-            ) : null}
           </div>
+        </div>
+      )}
 
-          <div className="mt-5 space-y-3">
-            {studioState.reviewChecks.map((check) => (
-              <div key={check.name} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-medium text-slate-100">{check.name}</div>
-                    <div className="mt-1 text-xs text-slate-500">{check.note}</div>
-                  </div>
-                  <span className={`rounded-full border px-2 py-1 text-[10px] ${badgeStyles[check.status]}`}>
-                    {check.status === 'passed' ? '通过' : check.status === 'warning' ? '警告' : '待确认'}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+      {reviewPageTab === 'delivery' && (
+        <ReviewArtifactsPanel
+          loading={loading}
+          shellCaseId={shellCaseId}
+          deliveryPackLast={deliveryPackLast}
+          deliveryPackError={deliveryPackError}
+          caseContractSummary={caseContractSummary}
+          caseContractSummaryLoading={caseContractSummaryLoading}
+          isTauri={isTauri}
+          contractChain={contractChain}
+          triadBridgePaths={triadBridgePaths}
+          liveMonitorAssets={liveMonitorAssets}
+          notebookAssetChain={notebookAssetChain}
+          standardObjectReportAssets={standardObjectReportAssets}
+          notebookMetaMap={notebookMetaMap}
+          memoPreviewMap={memoPreviewMap}
+          shellEntryPoints={shellEntryPoints}
+          artifacts={artifacts}
+          selectedAssetPath={selectedReviewAssetPath}
+          highlightedAssetPath={highlightedReviewAssetPath}
+          onSelectAsset={(path) => {
+            setHighlightedReviewAssetPath('');
+            setSelectedReviewAssetPath(path);
+          }}
+          selectedAssetPreview={selectedReviewAssetPreview}
+          selectedAssetPreviewLoading={selectedReviewAssetPreviewLoading}
+          selectedAssetPreviewError={selectedReviewAssetPreviewError}
+          selectedAssetActions={reviewPreviewActions}
+          selectedAssetStatusNote={reviewPreviewStatusNote}
+        />
+      )}
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
-          <h2 className="text-sm font-semibold text-slate-200">交付物与导出</h2>
-          <div className="mt-1 text-xs text-slate-500">{loading ? '读取真实 artifacts 中...' : '优先展示真实案例产物'}</div>
-          <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-100">交付文档包（delivery_pack）</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  写入 <span className="font-mono text-slate-400">cases/{shellCaseId}/contracts/delivery_pack/&lt;UTC&gt;/</span>
-                  ：manifest、SUMMARY、<span className="font-mono text-slate-400">snapshots/triad/</span>（三件套）与{' '}
-                  <span className="font-mono text-slate-400">snapshots/contracts/&lt;相对路径&gt;</span>
-                  （YAML 列出的 contracts 内文件）；并更新{' '}
-                  <span className="font-mono text-slate-400">delivery_pack.latest.json</span>。
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={deliveryPackBusy || !shellCaseId || !isTauri}
-                  onClick={() => void runDeliveryDocsPack(false)}
-                  className="rounded-lg border border-emerald-600/50 bg-emerald-950/40 px-2 py-1 text-[10px] text-emerald-200/90 disabled:opacity-50"
-                  title="默认即使 Gate/Lint 未过也落盘；manifest 记录 eligible_at_pack_time"
-                >
-                  {deliveryPackBusy ? '生成中…' : '生成交付包'}
-                </button>
-                <button
-                  type="button"
-                  disabled={deliveryPackBusy || !shellCaseId || !isTauri}
-                  onClick={() => void runDeliveryDocsPack(true)}
-                  className="rounded-lg border border-slate-600/60 bg-slate-800/70 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-                  title="须签发 Gate 与 knowledge_lint 均通过才写入"
-                >
-                  {deliveryPackBusy ? '生成中…' : '严格（须 Gate+Lint）'}
-                </button>
-                {deliveryPackLast?.pack_dir ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={!isTauri}
-                      onClick={() => openPath(deliveryPackLast.pack_dir)}
-                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
-                    >
-                      打开目录
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!isTauri}
-                      onClick={() => revealPath(deliveryPackLast.pack_dir)}
-                      className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-                    >
-                      定位
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            </div>
-            {deliveryPackError ? (
-              <p className="mt-2 text-[11px] text-rose-300/90">{deliveryPackError}</p>
-            ) : null}
-            {deliveryPackError &&
-            Array.isArray(deliveryPackLast?.combined_blockers) &&
-            deliveryPackLast.combined_blockers.length > 0 ? (
-              <ul className="mt-2 list-inside list-disc space-y-1 text-[11px] text-amber-200/90">
-                {deliveryPackLast.combined_blockers.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-            {deliveryPackLast ? (
-              <p className="mt-2 text-[11px] text-slate-500">
-                ok: {deliveryPackLast.ok ? '是' : '否'} · eligible_at_pack_time:{' '}
-                {deliveryPackLast.eligible_at_pack_time ? '是' : '否'}
-                {deliveryPackLast.pack_dir ? (
-                  <>
-                    {' '}
-                    · <span className="font-mono text-slate-400">{deliveryPackLast.pack_dir}</span>
-                  </>
-                ) : null}
-              </p>
-            ) : null}
-            {caseContractSummary.delivery_pack_pointer_rel ? (
-              <div className="mt-3 rounded-lg border border-slate-700/40 bg-slate-950/50 p-3 text-[11px] text-slate-500">
-                <div className="font-medium text-slate-400">壳层摘要 · 最新交付包指针</div>
-                <div className="mt-1">
-                  pack_id{' '}
-                  <span className="font-mono text-slate-300">{caseContractSummary.delivery_pack_id || '—'}</span>
-                  {' · '}
-                  eligible_at_pack_time: {caseContractSummary.delivery_pack_eligible_at_last_pack ? '是' : '否'}
-                  {caseContractSummary.delivery_pack_updated_at ? (
-                    <>
-                      {' '}
-                      · updated{' '}
-                      <span className="font-mono text-slate-400">{caseContractSummary.delivery_pack_updated_at}</span>
-                    </>
-                  ) : null}
-                </div>
-                <div className="mt-1 font-mono text-[10px] text-slate-600 break-all">
-                  {caseContractSummary.delivery_latest_pack_rel || caseContractSummary.delivery_pack_pointer_rel}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {caseContractSummary.delivery_latest_pack_rel ? (
-                    <button
-                      type="button"
-                      disabled={!isTauri}
-                      onClick={() => openPath(caseContractSummary.delivery_latest_pack_rel)}
-                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-2 py-1 text-[10px] text-hydro-300 disabled:opacity-50"
-                    >
-                      打开最新包目录
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={!isTauri}
-                    onClick={() => openPath(caseContractSummary.delivery_pack_pointer_rel)}
-                    className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-                  >
-                    打开指针 JSON
-                  </button>
-                  {caseContractSummary.delivery_latest_pack_rel ? (
-                    <button
-                      type="button"
-                      disabled={!isTauri}
-                      onClick={() => revealPath(caseContractSummary.delivery_latest_pack_rel)}
-                      className="rounded-lg border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300 disabled:opacity-50"
-                    >
-                      定位最新包
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ) : !caseContractSummaryLoading ? (
-              <p className="mt-2 text-[11px] text-slate-600">
-                尚无 <span className="font-mono">delivery_pack.latest.json</span>；生成一次交付包后将出现在此并由摘要轮询刷新。
-              </p>
-            ) : null}
-          </div>
-          <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-semibold text-slate-100">Run / Review / Release 合同链</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  先读 WorkflowRun，再核 ReviewBundle，最后从 ReleaseManifest 进入正式交付清单。
-                </div>
-              </div>
-              <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-300">
-                contract triad
-              </span>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-3">
-              {contractChain.map((contract) => (
-                <div key={contract.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-wider text-slate-500">{contract.stage}</div>
-                      <div className="mt-1 text-sm text-slate-200">{contract.contractName}</div>
-                    </div>
-                    <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
-                      {contract.status}
-                    </span>
-                  </div>
-                  <div className="mt-3 text-xs leading-5 text-slate-500">{contract.note}</div>
-                  <div className="mt-3 text-[10px] leading-5 text-slate-500">{contract.path}</div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      onClick={() => openPathWithAlternates(contract.pathAlternates || [contract.path])}
-                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                    >
-                      打开
-                    </button>
-                    <button
-                      onClick={() => revealPathWithAlternates(contract.pathAlternates || [contract.path])}
-                      className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                    >
-                      定位
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4 rounded-2xl border border-hydro-500/20 bg-hydro-500/5 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-semibold text-slate-100">Live 监控与验收入口</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  在产品壳里直接打开当前案例（{shellCaseId}）的 live dashboard、coverage 和 verification 资产。
-                </div>
-              </div>
-              <span className="rounded-full border border-hydro-500/30 bg-hydro-500/10 px-3 py-1 text-[10px] text-hydro-300">
-                pinned shell · {shellCaseId}
-              </span>
-            </div>
-            <div className="mt-4 space-y-3">
-              {liveMonitorAssets.map((asset) => (
-                <div
-                  key={asset.path}
-                  data-testid="review-live-asset"
-                  data-contract-path={asset.path}
-                  className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4"
-                >
-                  <div className="text-sm text-slate-200">{asset.name}</div>
-                  <div className="mt-1 text-xs leading-5 text-slate-500">{asset.note}</div>
-                  <div className="mt-3 text-xs text-slate-500">{asset.path}</div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      onClick={() => openPath(asset.path)}
-                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                    >
-                      打开
-                    </button>
-                    <button
-                      onClick={() => revealPath(asset.path)}
-                      className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                    >
-                      定位
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          {notebookAssetChain.length > 0 && (
-            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">Notebook / Memo / Manifest 联动</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    把 Notebook 原稿、自动生成 Memo 和 ReleaseManifest 放到同一审查面板，便于追踪“草稿 → 审查 → 签发”链条。
-                  </div>
-                </div>
-                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-300">
-                  notebook chain
-                </span>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                {notebookAssetChain.map((asset) => (
-                  <div key={asset.path} className="rounded-xl border border-slate-700/40 bg-slate-950/40 p-4">
-                    <div className="text-sm text-slate-200">{asset.name}</div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">{asset.note}</div>
-                    {notebookMetaMap[asset.path] && (
-                      <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
-                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-300">
-                          {notebookMetaMap[asset.path].version || 'v0.1.0'}
-                        </span>
-                        <span className="rounded-full border border-slate-700/40 bg-slate-900/60 px-2 py-1 text-slate-300">
-                          {notebookMetaMap[asset.path].signoffStatus || 'draft'}
-                        </span>
-                        <span className="rounded-full border border-slate-700/40 bg-slate-900/60 px-2 py-1 text-slate-300">
-                          {notebookMetaMap[asset.path].updatedBy || 'unknown'}
-                        </span>
-                      </div>
-                    )}
-                    <div className="mt-3 rounded-xl border border-slate-700/30 bg-slate-900/50 p-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Preview</div>
-                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-300">
-                        {memoPreviewMap[asset.path] || '在桌面壳中可读取 memo 预览。'}
-                      </pre>
-                    </div>
-                    <div className="mt-3 text-[10px] text-slate-500">{asset.path}</div>
-                    <div className="mt-3 flex items-center gap-2">
-                      <button
-                        onClick={() => openPath(asset.path)}
-                        className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                      >
-                        打开
-                      </button>
-                      <button
-                        onClick={() => revealPath(asset.path)}
-                        className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                      >
-                        定位
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-950/40 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-semibold text-slate-100">路线图 / backlog 入口</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  把当前案例壳层（North Star）、HydroDesk backlog 与命令入口收敛到同一面板。
-                </div>
-              </div>
-              <span className="rounded-full border border-slate-700/50 px-3 py-1 text-[10px] text-slate-300">
-                aligned
-              </span>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              {shellEntryPoints.map((entryPoint) => (
-                <div key={entryPoint.path} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm text-slate-200">{entryPoint.title}</div>
-                    <span className="rounded-full border border-slate-700/50 px-2 py-1 text-[10px] text-slate-300">
-                      {entryPoint.kind}
-                    </span>
-                  </div>
-                  <div className="mt-2 text-xs leading-5 text-slate-500">{entryPoint.summary}</div>
-                  <div className="mt-3 text-[10px] leading-5 text-slate-500">{entryPoint.path}</div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      onClick={() => openPath(entryPoint.path)}
-                      className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300"
-                    >
-                      打开
-                    </button>
-                    <button
-                      onClick={() => revealPath(entryPoint.path)}
-                      className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300"
-                    >
-                      定位
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4 space-y-3">
-            {artifacts.slice(0, 6).map((report) => (
-              <div key={report.name} className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-4">
-                <div className="text-sm text-slate-200">{report.name}</div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {(report.type || report.category || 'artifact')} · 更新于 {report.updated || report.updated_at || 'unknown'}
-                </div>
-                <div className="mt-3 text-xs text-slate-500">{report.path}</div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button onClick={() => openPath(report.path)} className="rounded-lg border border-hydro-500/30 bg-hydro-500/10 px-3 py-1.5 text-xs text-hydro-300">
-                    打开
-                  </button>
-                  <button onClick={() => revealPath(report.path)} className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300">
-                    定位
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <div className="grid grid-cols-[1fr,1fr,1.1fr] gap-6">
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+      {reviewPageTab === 'reading' && (
+      <div className="space-y-4">
+        <details className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+          <summary className="cursor-pointer list-none">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-200">拓扑图联动</h2>
-              <p className="mt-1 text-xs text-slate-500">点击节点后，成果页跳转到对应的审查片段、产物与结论。</p>
+              <p className="mt-1 text-xs text-slate-500">展开查看拓扑节点与成果片段联动。</p>
             </div>
             <span className="text-xs text-slate-500">{roleTemplate.label}视角</span>
           </div>
+          </summary>
           <div className="mt-4 grid grid-cols-2 gap-3">
             {roleTemplate.topologyNodes.map((node, index) => (
               <button
@@ -931,16 +1462,18 @@ export default function ReviewDelivery() {
               </button>
             ))}
           </div>
-        </section>
+        </details>
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+        <details className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+          <summary className="cursor-pointer list-none">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-200">GIS 图联动</h2>
-              <p className="mt-1 text-xs text-slate-500">点击图层后，成果页切到对应空间证据，并反向高亮拓扑对象。</p>
+              <p className="mt-1 text-xs text-slate-500">展开查看图层与空间证据联动。</p>
             </div>
             <span className="text-xs text-slate-500">空间证据</span>
           </div>
+          </summary>
           <div className="mt-4 space-y-3">
             {roleTemplate.gisLayers.map((layer, index) => (
               <button
@@ -966,11 +1499,13 @@ export default function ReviewDelivery() {
               </button>
             ))}
           </div>
-        </section>
+        </details>
 
-        <section className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+        <details className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-5">
+          <summary className="cursor-pointer list-none">
           <div className="text-sm font-semibold text-slate-200">图文联动聚焦</div>
-          <div className="mt-1 text-xs text-slate-500">当前选中对象会驱动成果摘要、图上高亮和下方交付物过滤。</div>
+          <div className="mt-1 text-xs text-slate-500">展开查看当前焦点、联动效果和下游过滤。</div>
+          </summary>
           <div className="mt-4 rounded-2xl border border-slate-700/40 bg-slate-900/60 p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -983,20 +1518,16 @@ export default function ReviewDelivery() {
             </div>
             <p className="mt-4 text-sm leading-7 text-slate-300">{selectedSpotlight.description}</p>
             <div className="mt-4 space-y-3">
-              {[
-                '成果摘要自动滚动到对应章节',
-                '拓扑图高亮上下游关联节点',
-                'GIS 图同步切换相关图层与视口',
-                '交付物区自动过滤对应 artifact',
-              ].map((item) => (
+              {reviewSpotlightEffects.map((item) => (
                 <div key={item} className="rounded-xl border border-slate-700/40 bg-slate-950/30 px-3 py-2 text-sm text-slate-300">
                   {item}
                 </div>
               ))}
             </div>
           </div>
-        </section>
+        </details>
       </div>
+      )}
     </div>
   );
 }

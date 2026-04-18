@@ -1,0 +1,76 @@
+{
+  "_auto_generated": true,
+  "generator": "Hydrology/scripts/export_playwright_e2e_acceptance.py",
+  "loop_config": "Hydrology/configs/hydrodesk_autonomous_waternet_e2e_loop.yaml",
+  "acceptance_config": "Hydrology/configs/hydrodesk_e2e_acceptance_rollout.yaml",
+  "case_ids": [
+    "zhongxian",
+    "xuhonghe",
+    "yinchuojiliao",
+    "jiaodongtiaoshui",
+    "daduhe",
+    "yjdt"
+  ],
+  "cases": {
+    "zhongxian": {
+      "case_id": "zhongxian",
+      "display_name": "中线全线",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.8,
+      "assert_hydro_nse_when_pipeline_summary_present": false,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/zhongxian.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/中线全线_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/zhongxian/zhongxian_pipeline_summary.json"
+    },
+    "xuhonghe": {
+      "case_id": "xuhonghe",
+      "display_name": "徐洪河",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.8,
+      "assert_hydro_nse_when_pipeline_summary_present": false,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/xuhonghe.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/徐洪河_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/xuhonghe/xuhonghe_pipeline_summary.json"
+    },
+    "yinchuojiliao": {
+      "case_id": "yinchuojiliao",
+      "display_name": "引绰济辽",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.8,
+      "assert_hydro_nse_when_pipeline_summary_present": false,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/yinchuojiliao.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/引绰济辽_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/yinchuojiliao/yinchuojiliao_pipeline_summary.json"
+    },
+    "jiaodongtiaoshui": {
+      "case_id": "jiaodongtiaoshui",
+      "display_name": "胶东调水",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.8,
+      "assert_hydro_nse_when_pipeline_summary_present": false,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/jiaodongtiaoshui.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/胶东调水_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/jiaodongtiaoshui/jiaodongtiaoshui_pipeline_summary.json"
+    },
+    "daduhe": {
+      "case_id": "daduhe",
+      "display_name": "大渡河梯级",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.75,
+      "assert_hydro_nse_when_pipeline_summary_present": true,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/daduhe.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/大渡河梯级_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/daduhe/daduhe_pipeline_summary.json"
+    },
+    "yjdt": {
+      "case_id": "yjdt",
+      "display_name": "引江济太",
+      "min_wnal_level": 0.0,
+      "min_hydro_nse": 0.8,
+      "assert_hydro_nse_when_pipeline_summary_present": false,
+      "pipedream_case_config_relpath": "pipedream-hydrology-integration-lab/hydromind_control_server/configs/cases/yjdt.json",
+      "wnal_json_relpath": "pipedream-hydrology-integration-lab/research/wnal_evaluation/引江济太_wnal_evaluation.json",
+      "pipeline_summary_relpath": "pipedream-hydrology-integration-lab/research/e2e_reports/yjdt/yjdt_pipeline_summary.json"
+    }
+  }
+}

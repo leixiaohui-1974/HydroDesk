@@ -42,6 +42,16 @@ export const HYDRODESK_AGENT_STACK_FALLBACK = {
     manifest_rel: 'cases/{case_id}/manifest.yaml',
     contracts_rel: 'cases/{case_id}/contracts',
   },
+  product_governance: {
+    release_readiness_governance: 'Hydrology/configs/release_readiness_governance.yaml',
+    final_report_governance: 'Hydrology/configs/final_report_governance.yaml',
+    review_surface_gates: 'Hydrology/configs/review_surface_gates.yaml',
+    skill_registry: 'Hydrology/configs/skill_registry.yaml',
+  },
+  agent_loop: {
+    note: '长驻 Loop / 流式 / 降级：由 HydroDesk AgentWorkspace + Hydrology/workflows/agent_loop_gateway.py 承载。',
+    gateway_entry: 'Hydrology/workflows/agent_loop_gateway.py',
+  },
 };
 
 function deepMergeStack(base, patch) {
@@ -62,6 +72,12 @@ function deepMergeStack(base, patch) {
   }
   if (patch.case_project && typeof patch.case_project === 'object') {
     next.case_project = { ...base.case_project, ...patch.case_project };
+  }
+  if (patch.product_governance && typeof patch.product_governance === 'object') {
+    next.product_governance = { ...base.product_governance, ...patch.product_governance };
+  }
+  if (patch.agent_loop && typeof patch.agent_loop === 'object') {
+    next.agent_loop = { ...base.agent_loop, ...patch.agent_loop };
   }
   return next;
 }

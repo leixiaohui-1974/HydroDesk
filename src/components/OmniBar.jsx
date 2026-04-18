@@ -45,7 +45,7 @@ export default function OmniBar({ onReportGenerated }) {
           <input
             type="text"
             className="bg-transparent border-none outline-none w-[90%] text-sm text-slate-200 placeholder-slate-600"
-            placeholder="Type a natural language command (e.g., 'Run Daduhe fast validation via MCP')"
+            placeholder="Type a natural language command (e.g., 'Run fast validation via MCP')"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             disabled={loading}

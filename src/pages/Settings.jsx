@@ -1,4 +1,36 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+const QWEN_CODE_SERVICES = [
+  {
+    id: 'dashscope-compatible',
+    label: 'DashScope 兼容模式',
+    description: '使用 Qwen Code 文档中的 OpenAI 兼容 provider 配置，适合直连 DashScope。',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    envKey: 'DASHSCOPE_API_KEY',
+    models: [
+      { value: 'qwen3.6-plus', label: 'Qwen3.6-Plus' },
+      { value: 'qwen3-coder-plus', label: 'Qwen3-Coder-Plus' },
+      { value: 'qwen3.5-plus', label: 'Qwen3.5-Plus' },
+    ],
+  },
+  {
+    id: 'coding-plan',
+    label: '阿里云 Coding Plan',
+    description: '面向 Qwen Code 的官方编码模型入口，走独立的 coding.dashscope.aliyuncs.com 服务。',
+    baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
+    envKey: 'DASHSCOPE_API_KEY',
+    models: [
+      { value: 'qwen3-coder-plus', label: 'Qwen3-Coder-Plus' },
+      { value: 'qwen3-coder-30b-a3b-instruct', label: 'Qwen3-Coder-30B-A3B-Instruct' },
+      { value: 'qwen3-coder-480b-a35b-instruct', label: 'Qwen3-Coder-480B-A35B-Instruct' },
+    ],
+  },
+];
+
+function getQwenCodeService(serviceId) {
+  return QWEN_CODE_SERVICES.find((service) => service.id === serviceId) || QWEN_CODE_SERVICES[0];
+}
 
 const Section = ({ title, description, children }) => (
   <div className="bg-slate-800/40 rounded-xl border border-slate-700/50 p-4">
@@ -34,10 +66,13 @@ const Toggle = ({ enabled, onChange }) => (
 );
 
 export default function Settings({ isTauri }) {
+  const navigate = useNavigate();
   const [settings, setSettings] = useState({
     hydromindUrl: 'http://localhost:8000',
     ollamaUrl: 'http://localhost:11434',
     ollamaModel: 'qwen2.5:7b',
+    qwenCodeService: 'dashscope-compatible',
+    qwenCodeModel: 'qwen3.6-plus',
     offlineMode: false,
     autoSync: true,
     darkMode: true,
@@ -47,8 +82,23 @@ export default function Settings({ isTauri }) {
     telemetry: false,
   });
 
+  const selectedQwenCodeService = useMemo(
+    () => getQwenCodeService(settings.qwenCodeService),
+    [settings.qwenCodeService]
+  );
+
   const updateSetting = (key, value) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
+    setSettings((prev) => {
+      if (key === 'qwenCodeService') {
+        const nextService = getQwenCodeService(value);
+        return {
+          ...prev,
+          qwenCodeService: value,
+          qwenCodeModel: nextService.models[0]?.value || '',
+        };
+      }
+      return { ...prev, [key]: value };
+    });
   };
 
   return (
@@ -56,6 +106,13 @@ export default function Settings({ isTauri }) {
       <div>
         <h1 className="text-2xl font-bold text-slate-100">系统设置</h1>
         <p className="text-sm text-slate-400 mt-1">配置引擎连接、LLM模型、离线模式等参数</p>
+        <button
+          type="button"
+          onClick={() => navigate('/docs')}
+          className="mt-3 rounded-lg border border-slate-700/50 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300"
+        >
+          打开文档中心
+        </button>
       </div>
 
       {/* Backend connection */}
@@ -77,7 +134,7 @@ export default function Settings({ isTauri }) {
       </Section>
 
       {/* LLM configuration */}
-      <Section title="LLM 配置" description="本地大语言模型和推理引擎配置">
+      <Section title="LLM 配置" description="本地大语言模型、Qwen Code 服务和推理引擎配置">
         <SettingRow label="Ollama 地址" description="本地 Ollama 推理引擎地址">
           <input
             type="text"
@@ -98,6 +155,38 @@ export default function Settings({ isTauri }) {
             <option value="deepseek-r1:7b">DeepSeek-R1-7B</option>
           </select>
         </SettingRow>
+        <SettingRow label="Qwen Code 服务" description="切换 Qwen Code 使用的官方兼容服务或 Coding Plan 入口">
+          <select
+            value={settings.qwenCodeService}
+            onChange={(e) => updateSetting('qwenCodeService', e.target.value)}
+            className="w-60 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-hydro-500 focus:outline-none"
+          >
+            {QWEN_CODE_SERVICES.map((service) => (
+              <option key={service.id} value={service.id}>
+                {service.label}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        <SettingRow label="Qwen Code 模型" description="按所选服务切换可用的 Qwen3 编码模型">
+          <select
+            value={settings.qwenCodeModel}
+            onChange={(e) => updateSetting('qwenCodeModel', e.target.value)}
+            className="w-60 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-300 focus:border-hydro-500 focus:outline-none"
+          >
+            {selectedQwenCodeService.models.map((model) => (
+              <option key={model.value} value={model.value}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        <div className="rounded-xl border border-slate-700/40 bg-slate-900/50 p-3 text-xs text-slate-400">
+          <div className="text-slate-200">{selectedQwenCodeService.label}</div>
+          <div className="mt-1 leading-5">{selectedQwenCodeService.description}</div>
+          <div className="mt-2 font-mono text-[11px] text-slate-500">baseUrl: {selectedQwenCodeService.baseUrl}</div>
+          <div className="mt-1 font-mono text-[11px] text-slate-500">envKey: {selectedQwenCodeService.envKey}</div>
+        </div>
       </Section>
 
       {/* Offline mode */}

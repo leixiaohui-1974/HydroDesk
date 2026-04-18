@@ -10,7 +10,7 @@ import {
 import {
   caseEvidenceWorkflowOrder,
   getCaseWorkflowEvidence,
-} from '../data/daduheWorkflowEvidence';
+} from '../data/caseWorkflowEvidence';
 import ComponentLibrary from '../features/modeling/ComponentLibrary';
 import ModelCanvas from '../features/modeling/ModelCanvas';
 

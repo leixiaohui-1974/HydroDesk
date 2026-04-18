@@ -5,13 +5,12 @@ import {
   checkOllama,
   getSystemInfo,
   openPath,
-  openPathWithAlternates,
   revealPath,
-  revealPathWithAlternates,
 } from '../api/tauri_bridge';
 import { getActiveRoleAgent, getPendingApprovals, getRunningTasks, studioState } from '../data/studioState';
 import { getCaseWorkbenchStages, resolveShellCaseId } from '../data/case_contract_shell';
 import { useCaseContractSummary } from '../hooks/useCaseContractSummary';
+import { useCaseRunReviewReleaseContracts } from '../hooks/useCaseRunReviewReleaseContracts';
 import { useStudioRuntime } from '../hooks/useStudioRuntime';
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution';
 import { useStudioWorkspace } from '../context/StudioWorkspaceContext';
@@ -66,25 +65,25 @@ function StageCard({ stage }) {
         {stage.evidencePath && (
           <>
             <button
-              onClick={() =>
-                (stage.evidencePathAlternates?.length
-                  ? openPathWithAlternates(stage.evidencePathAlternates)
-                  : openPath(stage.evidencePath))
-              }
+              onClick={() => openPath(stage.evidencePath)}
               className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
             >
               打开锚点
             </button>
             <button
-              onClick={() =>
-                (stage.evidencePathAlternates?.length
-                  ? revealPathWithAlternates(stage.evidencePathAlternates)
-                  : revealPath(stage.evidencePath))
-              }
+              onClick={() => revealPath(stage.evidencePath)}
               className="rounded-lg border border-slate-700/50 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/60"
             >
               定位锚点
             </button>
+            {stage.evidenceBridgePath ? (
+              <button
+                onClick={() => openPath(stage.evidenceBridgePath)}
+                className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 transition-colors hover:bg-amber-500/20"
+              >
+                打开 Bridge
+              </button>
+            ) : null}
           </>
         )}
         {stage.secondaryPath && (
@@ -113,6 +112,7 @@ export default function Dashboard() {
   const activeAgent = getActiveRoleAgent('/workbench');
   const { runtimeSnapshot } = useStudioRuntime();
   const { summary: caseSummary } = useCaseContractSummary(shellCaseId);
+  const contractChain = useCaseRunReviewReleaseContracts(shellCaseId);
   const { artifacts, executionHistory, launchResult, logTail } = useWorkflowExecution(shellCaseId, studioState.artifacts);
   const currentLogFile = logTail.log_file || launchResult?.log_file || runtimeSnapshot.log_file;
 
@@ -128,7 +128,7 @@ export default function Dashboard() {
   }, []);
 
   const stageCards = useMemo(() => {
-    const baseStages = getCaseWorkbenchStages(shellCaseId);
+    const baseStages = getCaseWorkbenchStages(shellCaseId, contractChain);
 
     return baseStages.map((stage) => {
       if (stage.key === 'launch') {
@@ -165,7 +165,7 @@ export default function Dashboard() {
         tone: caseSummary.closure_check_passed ? 'live' : 'pending',
       };
     });
-  }, [caseSummary, currentLogFile, executionHistory.length, launchResult, pendingApprovals.length, runtimeSnapshot.resume_prompt, shellCaseId]);
+  }, [caseSummary, contractChain, currentLogFile, executionHistory.length, launchResult, pendingApprovals.length, runtimeSnapshot.resume_prompt, shellCaseId]);
 
   const statCards = [
     {
